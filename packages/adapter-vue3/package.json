@@ -1,0 +1,56 @@
+{
+  "name": "@zfs-boe-inspector/adapter-vue3",
+  "version": "0.1.0",
+  "description": "ZFS BOE Vue3 Runtime Adapter 与字段配置采集桥接器",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hardwell/zfs-boe-inspector.git",
+    "directory": "packages/adapter-vue3"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./zfs-boe": {
+      "types": "./dist/zfsBoe.d.ts",
+      "import": "./dist/zfsBoe.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json",
+    "prepack": "pnpm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@zfs-boe-inspector/shared-types": "workspace:^"
+  },
+  "devDependencies": {
+    "vue": "3.5.41"
+  },
+  "peerDependencies": {
+    "@zfs/boe": ">=4.2.0-0 <5",
+    "vue": ">=3.4.0 <4"
+  },
+  "peerDependenciesMeta": {
+    "@zfs/boe": {
+      "optional": true
+    }
+  }
+}
