@@ -5,13 +5,15 @@ import path from 'node:path';
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const registry = 'https://registry.npmjs.org/';
 const packages = [
-  '@zfs-boe-inspector/shared-types',
-  '@zfs-boe-inspector/adapter-vue3',
+  {
+    name: '@zfs-boe-inspector/shared-types',
+    directory: 'packages/shared-types',
+  },
+  {
+    name: '@zfs-boe-inspector/adapter-vue3',
+    directory: 'packages/adapter-vue3',
+  },
 ];
-
-if (!process.env.NODE_AUTH_TOKEN && !process.env.NPM_TOKEN) {
-  throw new Error('未检测到 NODE_AUTH_TOKEN/NPM_TOKEN，请在 GitHub Actions 配置 NPM_TOKEN');
-}
 
 function packageVersion(packageName) {
   const result = spawnSync(
@@ -40,27 +42,24 @@ function isPublished(packageName, version) {
   process.exit(result.status ?? 1);
 }
 
-for (const packageName of packages) {
-  const version = packageVersion(packageName);
-  if (isPublished(packageName, version)) {
-    console.log(`跳过已发布版本：${packageName}@${version}`);
+for (const packageInfo of packages) {
+  const version = packageVersion(packageInfo.name);
+  if (isPublished(packageInfo.name, version)) {
+    console.log(`跳过已发布版本：${packageInfo.name}@${version}`);
     continue;
   }
 
-  console.log(`发布 ${packageName}@${version}`);
+  console.log(`发布 ${packageInfo.name}@${version}（Trusted Publishing OIDC）`);
   const result = spawnSync(
-    'pnpm',
+    'npm',
     [
-      '--filter',
-      packageName,
       'publish',
       '--access',
       'public',
-      '--no-git-checks',
       '--registry',
       registry,
     ],
-    { cwd: rootDir, stdio: 'inherit' },
+    { cwd: path.join(rootDir, packageInfo.directory), stdio: 'inherit' },
   );
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);

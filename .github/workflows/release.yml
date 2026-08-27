@@ -7,20 +7,22 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
         with:
           version: 10.14.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22.12.0
+          node-version: '24'
           cache: pnpm
           registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm release:check
       - run: pnpm lint
@@ -28,13 +30,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm pack:npm
-      - name: 检查 npm 发布身份
-        run: npm whoami --registry=https://registry.npmjs.org/
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: pnpm publish:npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: 使用 Trusted Publishing 发布 npm 包
+        run: pnpm publish:npm
       - run: pnpm pack:extension
       - name: 创建 GitHub Release
         env:
