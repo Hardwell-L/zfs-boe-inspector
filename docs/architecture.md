@@ -39,5 +39,10 @@ BOE Inspector Panel
 
 - `dataFormat()` 默认不调用；只有项目完成副作用审计后，才能显式提供 `getFormattedBoeDto`。
 - `checkStandard()`、`beforeSubmit()` 和未知校验函数永不由 Inspector 调用。
+- 校验、计算和关联申请诊断只解析序列化配置，不调用 `validateRuleByDoCalculate`、`getCalculateValue`、`getComputedValue` 或 `transApplyBoeData`。
 - `getDynamicConfig()` 仅允许项目显式传入，并始终接收字段浅拷贝；失败时记录 `evaluationError`。
 - Promise 只记录元数据，API Key 和外部模型调用不存在于首版。
+
+### 规则诊断模型
+
+`core` 将校验、计算、动态和关联申请配置转换为统一的只读诊断模型。模型区分 `issue`、`unverified` 和已有运行态 `ok`：只有非法配置、缺失字段、循环依赖、重复目标映射或三段快照明确不一致才进入正式问题；不能静态确认的执行结果保持未验证。Side Panel 负责折叠展示、筛选与字段定位，不在 UI 内重复业务解析。

@@ -13,6 +13,7 @@
 - `config.fieldDescriptors`：由 `boeDesign` 的 `fieldConfig` 净化得到的字段属性描述。
 - `config.fieldRuntimeStates`：使用受信任 `getDynamicConfig` 对字段浅拷贝计算出的显示/编辑/必填状态。
 - `travel`：当前人员、行程、标准请求元数据、结果、缓存日期和汇总；`standardDates` 同时兼容字符串和 BOE 运行时对象结构。
+- `applyBoe`：可选的关联申请证据快照，包含最近一次源申请数据、转换结果及可选流程状态。
 - `warnings`：采集失败但不影响其余 Snapshot 的信息。
 
 ## 序列化
@@ -44,4 +45,4 @@ Bridge 不提供 setter、请求重放或任意表达式执行能力。
 
 ## 规则结果
 
-每条规则输出 `passed`、`issue` 或 `skipped`。`skipped` 用于 Snapshot 缺少确定性判断所需输入，不计入正式问题数。`issue` 必须包含 `ruleId`、等级、摘要和证据路径，可选实际值、期望值、原因和建议。
+每条规则输出 `passed`、`issue` 或 `skipped`。类别除 `field-config`、`travel-standard` 外，还包括 `validation-rule`、`calculation-rule`、`dynamic-rule` 和 `apply-boe`。`skipped` 用于 Snapshot 缺少确定性判断所需输入或不能静态确认执行结果，不计入正式问题数。`issue` 必须包含 `ruleId`、等级、摘要和证据路径，可选实际值、期望值、原因和建议。

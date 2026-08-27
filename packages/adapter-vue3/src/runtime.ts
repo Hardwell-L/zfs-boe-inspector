@@ -40,7 +40,7 @@ export class BoeInspectorRuntime {
   constructor(options: AdapterOptions) {
     this.options = {
       ...options,
-      adapterVersion: options.adapterVersion ?? '0.1.0',
+      adapterVersion: options.adapterVersion ?? '0.2.0',
     };
   }
 

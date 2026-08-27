@@ -48,6 +48,23 @@ describe('BillTemplate Collector', () => {
       line: [{ code: 'areaName', label: '显示名称', classify: 'base', type: 'text' }],
     });
   });
+
+  it('按需采集关联申请快照，回调异常只生成 warning', () => {
+    const component = { template: [], data: {} };
+    const captured = createBillTemplateCollector(component, {
+      getApplySnapshot: (current) => {
+        expect(current).toBe(component);
+        return { lastApplyBoeData: [{ applyHeader: [{ id: '1' }] }], lastTransData: { boeHeader: [{ id: '1' }] } };
+      },
+    }).collect();
+    expect(captured.applyBoe?.lastApplyBoeData).toHaveLength(1);
+
+    const failed = createBillTemplateCollector(component, {
+      getApplySnapshot: () => { throw new Error('snapshot failed'); },
+    }).collect();
+    expect(failed.applyBoe).toBeUndefined();
+    expect(failed.warnings?.[0]).toContain('snapshot failed');
+  });
 });
 
 describe('Travel Collector', () => {

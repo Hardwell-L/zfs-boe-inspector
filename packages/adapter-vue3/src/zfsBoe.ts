@@ -8,6 +8,7 @@ import { areaConfig, fieldConfig } from '@zfs/boe/zfs-boe-core/src/config/boeDes
 import getDynamicConfig from '@zfs/boe/zfs-boe-core/src/utils/fieldDynamicConfig';
 import type {
   AdapterOptions,
+  BillTemplateCollectorOptions,
   BillTemplateComponentLike,
   TravelComponentLike,
 } from './collector';
@@ -19,7 +20,8 @@ import {
 
 declare const process: { env?: { NODE_ENV?: string } } | undefined;
 
-export type ZfsBoeInspectorOptions = Partial<AdapterOptions>;
+export type ZfsBoeInspectorOptions = Partial<AdapterOptions>
+  & Pick<BillTemplateCollectorOptions, 'getApplySnapshot'>;
 
 type BillTemplateInstance = BillTemplateComponentLike & object;
 type TravelInstance = TravelComponentLike & object;
@@ -47,7 +49,7 @@ function resolvedOptions(
   const resolved: AdapterOptions = {
     projectCode: options.projectCode ?? inferredProjectCode(),
     environment: options.environment ?? inferredEnvironment(),
-    adapterVersion: options.adapterVersion ?? '0.1.0',
+    adapterVersion: options.adapterVersion ?? '0.2.0',
     zfsPackages: {
       '@zfs/boe': boePackage.version,
       '@zfs/ui-plus': boePackage.dependencies?.['@zfs/ui-plus'] ?? 'unknown',
@@ -70,6 +72,7 @@ function registerBillTemplate(
     areaConfig,
     fieldConfig,
     getDynamicConfig,
+    ...(options.getApplySnapshot ? { getApplySnapshot: options.getApplySnapshot } : {}),
   });
   registrations.set(component, dispose);
 }

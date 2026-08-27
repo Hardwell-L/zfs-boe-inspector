@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { buildTravelView, runInspection } from '@zfs-boe-inspector/core';
+import {
+  buildRuleDiagnostics,
+  buildTravelView,
+  runInspection,
+  type RuleDiagnosticEntry,
+} from '@zfs-boe-inspector/core';
 import { baseRuleEvaluators } from '@zfs-boe-inspector/rule-base';
 import type {
   AreaDetail,
@@ -14,8 +19,9 @@ import type {
 } from '@zfs-boe-inspector/shared-types';
 import { pageBridge } from './bridge';
 
-type ViewKey = 'overview' | 'fields' | 'issues' | 'travel' | 'runtime' | 'about';
+type ViewKey = 'overview' | 'fields' | 'rules' | 'issues' | 'travel' | 'runtime' | 'about';
 type PropertyTab = 'base' | 'advance' | 'data' | 'raw';
+type RuleTab = 'validation' | 'calculation' | 'dynamic' | 'applyBoe';
 
 const view = ref<ViewKey>('overview');
 const loading = ref(false);
@@ -30,11 +36,15 @@ const activeInstanceId = ref('');
 const fieldSearch = ref('');
 const issueFilter = ref<'all' | 'error' | 'warning' | 'info' | 'skipped'>('all');
 const pickerActive = ref(false);
+const ruleTab = ref<RuleTab>('validation');
+const onlyRuleIssues = ref(false);
+const showRuleTechnical = ref(false);
 let pickerTimer: ReturnType<typeof setInterval> | undefined;
 
 const navItems: Array<{ key: ViewKey; label: string }> = [
   { key: 'overview', label: '单据概览' },
   { key: 'fields', label: '字段配置' },
+  { key: 'rules', label: '规则诊断' },
   { key: 'issues', label: '问题列表' },
   { key: 'travel', label: '差旅标准' },
   { key: 'runtime', label: '运行时数据' },
@@ -52,6 +62,13 @@ const areaTabs: Array<{ key: PropertyTab; label: string }> = [
   { key: 'base', label: '基本' },
   { key: 'advance', label: '高级' },
   { key: 'raw', label: '原始区域配置' },
+];
+
+const ruleTabs: Array<{ key: RuleTab; label: string }> = [
+  { key: 'validation', label: '校验' },
+  { key: 'calculation', label: '计算' },
+  { key: 'dynamic', label: '动态' },
+  { key: 'applyBoe', label: '关联申请' },
 ];
 
 const areas = computed(() => (snapshot.value?.config.template ?? []).flatMap((value, areaIndex) => {
@@ -78,6 +95,26 @@ const propertyTabs = computed(() => selectedArea.value ? areaTabs : fieldTabs);
 const activePropertyGroup = computed(() => (selectedArea.value?.groups ?? selectedField.value?.groups)
   ?.find(({ key }) => key === propertyTab.value));
 const travelView = computed(() => buildTravelView(snapshot.value?.travel));
+const ruleDiagnostics = computed(() => snapshot.value ? buildRuleDiagnostics(snapshot.value) : undefined);
+const activeRuleModel = computed(() => ruleDiagnostics.value?.[ruleTab.value]);
+const ruleGroups = computed(() => {
+  const entries = (activeRuleModel.value?.entries ?? [])
+    .filter(({ state }) => !onlyRuleIssues.value || state === 'issue');
+  const groups = new Map<string, { areaCode: string; areaName: string; entries: RuleDiagnosticEntry[]; truncated: number }>();
+  for (const entry of entries) {
+    const areaCode = entry.areaCode || 'global';
+    const group = groups.get(areaCode) ?? {
+      areaCode,
+      areaName: entry.areaName || (areaCode === 'global' ? '全局配置' : areaCode),
+      entries: [],
+      truncated: 0,
+    };
+    if (group.entries.length < 50) group.entries.push(entry);
+    else group.truncated += 1;
+    groups.set(areaCode, group);
+  }
+  return [...groups.values()];
+});
 
 const connectedLabel = computed(() => status.value?.connected ? '已连接' : '未连接');
 
@@ -210,6 +247,15 @@ function exportReport() {
 
 function evaluationClass(evaluation: RuleEvaluation) {
   return evaluation.status === 'skipped' ? 'skipped' : evaluation.severity ?? 'info';
+}
+
+function diagnosticClass(entry: RuleDiagnosticEntry) {
+  return entry.state === 'issue' ? entry.severity ?? 'error' : entry.state;
+}
+
+async function locateDiagnostic(entry: RuleDiagnosticEntry) {
+  if (!entry.areaCode || !entry.fieldCode) return;
+  await selectField({ areaCode: entry.areaCode, fieldCode: entry.fieldCode, rowIndex: entry.rowIndex ?? 0 }, true);
 }
 
 function propertyValue(value: JsonValue | undefined) {
@@ -383,6 +429,93 @@ onBeforeUnmount(() => {
           </section>
         </section>
 
+        <section v-if="view === 'rules'" class="section rule-diagnostics">
+          <div class="section-header rule-header">
+            <div>
+              <h2>规则诊断</h2>
+              <p class="muted">
+                只解析配置与已有运行态证据，不执行校验、计算或关联申请转换。
+              </p>
+            </div>
+            <div class="rule-switches">
+              <label><input v-model="onlyRuleIssues" type="checkbox"> 只看问题</label>
+              <label><input v-model="showRuleTechnical" type="checkbox"> 显示技术详情</label>
+            </div>
+          </div>
+          <div class="property-tabs rule-tabs" role="tablist" aria-label="规则诊断分类">
+            <button
+              v-for="tab in ruleTabs"
+              :key="tab.key"
+              role="tab"
+              :aria-selected="ruleTab === tab.key"
+              :class="{ active: ruleTab === tab.key }"
+              @click="ruleTab = tab.key"
+            >
+              {{ tab.label }}
+            </button>
+          </div>
+          <div v-if="activeRuleModel" class="metric-grid rule-metrics">
+            <article><span>诊断条目</span><strong>{{ activeRuleModel.metrics.total }}</strong></article>
+            <article><span>确定问题</span><strong>{{ activeRuleModel.metrics.issues }}</strong></article>
+            <article><span>未验证</span><strong>{{ activeRuleModel.metrics.unverified }}</strong></article>
+            <article><span>可定位字段</span><strong>{{ activeRuleModel.metrics.locatable }}</strong></article>
+          </div>
+          <p v-if="activeRuleModel?.truncatedAreas.length" class="truncate-tip">
+            {{ activeRuleModel.truncatedAreas.map((item) => `${item.areaCode} 仅分析前 ${item.displayedRows}/${item.totalRows} 行`).join('；') }}
+          </p>
+          <div v-if="ruleGroups.length" class="diagnostic-groups">
+            <details v-for="group in ruleGroups" :key="group.areaCode" class="diagnostic-area" open>
+              <summary>
+                <strong>{{ group.areaName }}</strong>
+                <span>{{ group.areaCode }} · {{ group.entries.length }} 条</span>
+              </summary>
+              <details
+                v-for="(entry, index) in group.entries"
+                :key="`${entry.id}-${entry.fieldCode}-${entry.rowIndex}-${index}`"
+                class="diagnostic-entry"
+                :class="diagnosticClass(entry)"
+              >
+                <summary>
+                  <span class="diagnostic-status">{{ entry.state === 'issue' ? '问题' : entry.state === 'unverified' ? '未验证' : '已观察' }}</span>
+                  <span class="diagnostic-title">{{ entry.summary }}</span>
+                  <button
+                    v-if="entry.areaCode && entry.fieldCode"
+                    type="button"
+                    class="locate-button"
+                    @click.prevent.stop="locateDiagnostic(entry)"
+                  >
+                    定位字段
+                  </button>
+                </summary>
+                <div class="diagnostic-body">
+                  <p>{{ entry.detail }}</p>
+                  <p v-if="entry.dependencies?.length" class="muted">
+                    依赖：{{ entry.dependencies.join('、') }}
+                  </p>
+                  <dl v-if="entry.currentValues && Object.keys(entry.currentValues).length" class="value-list">
+                    <template v-for="(value, key) in entry.currentValues" :key="key">
+                      <dt>{{ key }}</dt><dd>{{ propertyValue(value) }}</dd>
+                    </template>
+                  </dl>
+                  <template v-if="showRuleTechnical">
+                    <p class="evidence-title">
+                      证据路径
+                    </p>
+                    <code v-for="path in entry.evidencePaths" :key="path">{{ path }}</code>
+                    <pre v-if="entry.technicalDetail !== undefined">{{ pretty(entry.technicalDetail) }}</pre>
+                  </template>
+                </div>
+              </details>
+              <p v-if="group.truncated" class="truncate-tip">
+                当前区域仅展示前 50 条，另有 {{ group.truncated }} 条已截断。
+              </p>
+            </details>
+          </div>
+          <p v-else class="placeholder">
+            {{ onlyRuleIssues ? '当前分类没有确定性问题。' : '当前模板没有此类规则配置。' }}
+          </p>
+        </section>
+
         <section v-if="view === 'issues'" class="section">
           <div class="section-header">
             <h2>问题列表</h2>
@@ -425,6 +558,18 @@ onBeforeUnmount(() => {
             当前实例未注册差旅 Collector。
           </div>
           <template v-else>
+            <article class="travel-business-summary">
+              <h3>业务摘要</h3>
+              <p>{{ travelView.businessSummary.conclusion }}</p>
+              <div class="prerequisite-grid">
+                <div v-for="item in travelView.businessSummary.prerequisites" :key="item.label" :class="{ missing: !item.satisfied }">
+                  <span>{{ item.label }}</span><strong>{{ item.value }}</strong>
+                </div>
+              </div>
+              <p class="muted">
+                已匹配 {{ travelView.businessSummary.matchedRows }} 行；未匹配 {{ travelView.businessSummary.unmatchedRows }} 行；超标准 {{ travelView.businessSummary.exceededRows }} 行。
+              </p>
+            </article>
             <div class="metric-grid travel-metrics">
               <article><span>当前人员</span><strong>{{ travelView.person.employeeName || '未识别' }}</strong></article>
               <article><span>行程天数</span><strong>{{ travelView.metrics.travelDays }}</strong></article>
@@ -458,10 +603,14 @@ onBeforeUnmount(() => {
             <h3>当前人员行程</h3>
             <div v-if="travelView.calendar.length" class="table-scroll">
               <table class="data-table">
-                <thead><tr><th>日期</th><th>人员</th><th>出差地点</th><th>住宿地点</th><th>金额/补贴</th></tr></thead>
+                <thead><tr><th>日期</th><th>人员</th><th>出差地点</th><th>住宿地点</th><th>金额/补贴</th><th>标准匹配</th><th>超标准</th></tr></thead>
                 <tbody>
                   <tr v-for="(row, index) in travelView.calendar" :key="`${row.date}-${index}`">
                     <td>{{ row.date }}</td><td>{{ row.employeeName }}</td><td>{{ row.travelSite }}</td><td>{{ row.staySite }}</td><td>{{ amountValue(row.amount) }}</td>
+                    <td>{{ row.matchStatus === 'matched' ? amountValue(row.matchedStandardAmount) : row.matchStatus === 'unmatched' ? '未匹配' : '未验证' }}</td>
+                    <td :class="{ 'text-error': (row.overAmount ?? 0) > 0 }">
+                      {{ row.overAmount === undefined ? '—' : amountValue(row.overAmount) }}
+                    </td>
                   </tr>
                 </tbody>
               </table>

@@ -19,6 +19,9 @@ export interface TravelCalendarRow {
   employeeId: string;
   employeeName: string;
   amount?: number | string;
+  matchedStandardAmount?: number;
+  overAmount?: number;
+  matchStatus: 'matched' | 'unmatched' | 'unverified';
   raw: JsonValue;
 }
 
@@ -32,6 +35,13 @@ export interface TravelViewModel {
   calendar: TravelCalendarRow[];
   requests: TravelRequestRow[];
   metrics: { travelDays: number; standardCount: number; requestCount: number; matchedRequestCount: number };
+  businessSummary: {
+    prerequisites: Array<{ label: string; satisfied: boolean; value: string }>;
+    matchedRows: number;
+    unmatchedRows: number;
+    exceededRows: number;
+    conclusion: string;
+  };
 }
 
 function asRecord(value: unknown): Record<string, JsonValue> | undefined {
@@ -97,6 +107,7 @@ function calendarRows(travel: TravelInspectionData): TravelCalendarRow[] {
       staySite: firstText(record, ['staySite', 'accommodationSite']) || '—',
       employeeId: firstText(record, ['employeeId', 'empId', 'travelerId']),
       employeeName: firstText(record, ['employeeName', 'empName', 'travelerName']) || '—',
+      matchStatus: 'unverified',
       raw: item,
     };
     const amount = firstAmount(record);
@@ -117,7 +128,37 @@ export function buildTravelView(travel?: TravelInspectionData): TravelViewModel 
     ...request,
     matched: Boolean(request.boeDate && resultDates.has(request.boeDate.slice(0, 10))),
   }));
+  for (const row of calendar) {
+    const candidates = standards.filter((standard) => {
+      if (standard.date !== row.date) return false;
+      return standard.place === '—'
+        || row.staySite === standard.place
+        || row.travelSite === standard.place;
+    });
+    if (candidates.length === 0) {
+      row.matchStatus = standards.length > 0 ? 'unmatched' : 'unverified';
+      continue;
+    }
+    row.matchStatus = 'matched';
+    const standardAmounts = candidates
+      .map(({ amount }) => Number(amount))
+      .filter((amount) => Number.isFinite(amount));
+    const expenseAmount = Number(row.amount);
+    if (standardAmounts.length > 0) row.matchedStandardAmount = Math.max(...standardAmounts);
+    if (Number.isFinite(expenseAmount) && row.matchedStandardAmount !== undefined) {
+      row.overAmount = Math.max(0, Number((expenseAmount - row.matchedStandardAmount).toFixed(2)));
+    }
+  }
   const person = travel?.currentPerson;
+  const exceededRows = calendar.filter(({ overAmount }) => (overAmount ?? 0) > 0).length;
+  const matchedRows = calendar.filter(({ matchStatus }) => matchStatus === 'matched').length;
+  const unmatchedRows = calendar.filter(({ matchStatus }) => matchStatus === 'unmatched').length;
+  const prerequisites = [
+    { label: '人员', satisfied: Boolean(person?.employeeId || person?.employeeName), value: person?.employeeName ?? person?.employeeId ?? '未识别' },
+    { label: '日期', satisfied: calendar.some(({ date }) => date !== '—'), value: `${new Set(calendar.map(({ date }) => date).filter((date) => date !== '—')).size} 天` },
+    { label: '地点', satisfied: calendar.some(({ travelSite, staySite }) => travelSite !== '—' || staySite !== '—'), value: calendar.map(({ travelSite, staySite }) => staySite !== '—' ? staySite : travelSite).filter((value) => value !== '—').join('、') || '未识别' },
+    { label: '标准请求', satisfied: requests.length > 0, value: `${requests.length} 条` },
+  ];
   return {
     person: {
       employeeId: person?.employeeId ?? '',
@@ -133,6 +174,19 @@ export function buildTravelView(travel?: TravelInspectionData): TravelViewModel 
       standardCount: standards.length,
       requestCount: requests.length,
       matchedRequestCount: requests.filter(({ matched }) => matched).length,
+    },
+    businessSummary: {
+      prerequisites,
+      matchedRows,
+      unmatchedRows,
+      exceededRows,
+      conclusion: prerequisites.some(({ satisfied }) => !satisfied)
+        ? '标准匹配前置条件不完整，请先核对人员、日期、地点和请求参数。'
+        : unmatchedRows > 0
+          ? `有 ${unmatchedRows} 行未匹配到差旅标准。`
+          : exceededRows > 0
+            ? `有 ${exceededRows} 行费用超过已匹配标准。`
+            : matchedRows > 0 ? '当前行程均已匹配标准，未发现明确超标准记录。' : '暂无可核对的行程。',
     },
   };
 }

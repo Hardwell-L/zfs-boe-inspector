@@ -30,7 +30,7 @@ export default {
 };
 ```
 
-两种方式都支持可选的 `projectCode` 等元数据覆盖，并自动管理注册和注销生命周期。
+两种方式都支持可选的 `projectCode` 等元数据覆盖，并自动管理注册和注销生命周期。关联申请三段对比可选传入 `getApplySnapshot(component)`；未传入时仍保留模板映射和当前值诊断，回调异常只生成采集 warning。
 
 ## 差旅组件
 

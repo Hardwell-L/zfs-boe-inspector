@@ -1,5 +1,6 @@
 import {
   SNAPSHOT_SCHEMA_VERSION,
+  type ApplyBoeEvidenceSnapshot,
   type BoeInspectionSnapshot,
   type FieldPropertyDescriptor,
   type FieldRuntimeState,
@@ -22,6 +23,7 @@ export interface CollectorContribution {
   runtime?: Partial<BoeInspectionSnapshot['runtime']>;
   config?: Partial<BoeInspectionSnapshot['config']>;
   travel?: TravelInspectionData;
+  applyBoe?: ApplyBoeEvidenceSnapshot;
   warnings?: string[];
 }
 
@@ -49,6 +51,9 @@ export interface BillTemplateCollectorOptions {
   fieldConfig?: Record<string, unknown[]>;
   getFormattedBoeDto?: () => unknown;
   getDynamicConfig?: (args: Record<string, unknown>) => boolean | Record<string, unknown> | void;
+  getApplySnapshot?: (
+    component: BillTemplateComponentLike,
+  ) => ApplyBoeEvidenceSnapshot | undefined;
 }
 
 export interface TravelComponentLike extends BillTemplateComponentLike {
@@ -228,7 +233,24 @@ export function createBillTemplateCollector(
       if (fieldDescriptors) config.fieldDescriptors = fieldDescriptors;
       const fieldRuntimeStates = collectRuntimeStates(component, options.getDynamicConfig);
       if (fieldRuntimeStates) config.fieldRuntimeStates = fieldRuntimeStates;
-      return { meta: getMeta(component), runtime, config, warnings };
+      let applyBoe: ApplyBoeEvidenceSnapshot | undefined;
+      if (options.getApplySnapshot) {
+        try {
+          const snapshot = options.getApplySnapshot(component);
+          if (snapshot) {
+            applyBoe = toSerializable(snapshot) as unknown as ApplyBoeEvidenceSnapshot;
+          }
+        } catch (error) {
+          warnings.push(`关联申请快照读取失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return {
+        meta: getMeta(component),
+        runtime,
+        config,
+        ...(applyBoe ? { applyBoe } : {}),
+        warnings,
+      };
     },
   };
 }
@@ -335,6 +357,7 @@ export function mergeContributions(
     Object.assign(snapshot.runtime, contribution.runtime);
     Object.assign(snapshot.config, contribution.config);
     if (contribution.travel) snapshot.travel = contribution.travel;
+    if (contribution.applyBoe) snapshot.applyBoe = contribution.applyBoe;
     if (contribution.warnings?.length) {
       snapshot.warnings = [...(snapshot.warnings ?? []), ...contribution.warnings];
     }

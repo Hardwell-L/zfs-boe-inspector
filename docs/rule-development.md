@@ -2,10 +2,14 @@
 
 ## 首版 Rule Pack
 
-首版只包含两个 category：
+规则包包含以下 category：
 
 - `field-config`：最终字段结构、运行时路径、显示/编辑/必填、动态配置、数据源、`trans`、前后置/级联、默认值、计算依赖、链接、导入和函数元数据。
 - `travel-standard`：日期、标准请求、缓存/结果、地点 key、业务类型、去重、逐日汇总、控制等级、补贴地点及人员一致性。
+- `validation-rule`：校验规则 JSON、控制节点、触发条件、表达式依赖和当前值。
+- `calculation-rule`：`calculate/computed` 配置、条件分支、字段依赖和循环依赖。
+- `dynamic-rule`：区域/字段动态配置与已采集的显示、编辑、必填运行态。
+- `apply-boe`：新旧 `dataTrans`、重复目标映射及可选三段快照一致性。
 
 静态配置解析遵循当前 BOE 已支持的 JSON、`${area.field}`、`${field#type}` 和依赖字段表达方式。不要扩展一个当前产品并未使用的新公式语法。
 

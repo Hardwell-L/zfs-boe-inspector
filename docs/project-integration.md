@@ -60,6 +60,20 @@ createBillTemplateInspectorMixin({
 
 不要默认传入 `getFormattedBoeDto: () => this.dataFormat()`。只有逐分支确认目标版本的 `dataFormat()` 不请求接口、不弹窗且不修改状态后，才允许显式开启。
 
+如需定位关联申请在“源申请数据 → 转换结果 → 当前字段值”中的具体阶段，可选传入只读快照回调：
+
+```javascript
+createBillTemplateInspectorMixin({
+  getApplySnapshot: () => ({
+    lastApplyBoeData: this.lastApplyBoeData,
+    lastTransData: this.lastTransData,
+    flowStatus: this.lastApplyFlowStatus,
+  }),
+});
+```
+
+未配置回调时仍会展示模板 `dataTrans` 和当前单据值；回调抛错只会写入 Snapshot warning，不影响页面。回调必须直接返回宿主页面已经持有的证据，不应在其中请求接口或重新执行 `transApplyBoeData`。
+
 ## 4. NEW_TRAVEL_BOE.vue 注册差旅数据
 
 差旅组件应使用 `zfs-boe` 入口提供的 Mixin 或 Composable。它会先安装 Runtime，再注册差旅采集器，避免父组件 mounted 早于 billTemplate 子组件时出现 Runtime 未安装异常：

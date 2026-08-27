@@ -7,6 +7,19 @@ import {
 
 export { buildTravelView } from './travelView';
 export type { TravelCalendarRow, TravelRequestRow, TravelStandardRow, TravelViewModel } from './travelView';
+export {
+  buildApplyBoeDiagnostics,
+  buildCalculationDiagnostics,
+  buildDynamicDiagnostics,
+  buildRuleDiagnostics,
+  buildValidationDiagnostics,
+} from './ruleDiagnostics';
+export type {
+  DiagnosticState,
+  RuleDiagnosticEntry,
+  RuleDiagnosticModel,
+  RuleDiagnostics,
+} from './ruleDiagnostics';
 
 export type RuleEvaluator = (snapshot: BoeInspectionSnapshot) => RuleEvaluation[];
 

@@ -23,6 +23,8 @@ describe('buildTravelView', () => {
     expect(view.standards[0]).toMatchObject({ place: '武汉', date: '2026-08-01', standardName: '住宿费', amount: 500 });
     expect(view.requests[0]?.matched).toBe(true);
     expect(view.metrics).toMatchObject({ travelDays: 1, standardCount: 2, matchedRequestCount: 1 });
+    expect(view.businessSummary.prerequisites.every(({ satisfied }) => satisfied)).toBe(true);
+    expect(view.calendar[0]?.matchStatus).toBe('matched');
   });
 
   it('无当前人员或无标准时返回稳定空视图', () => {

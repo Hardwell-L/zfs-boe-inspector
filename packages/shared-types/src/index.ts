@@ -60,6 +60,12 @@ export interface TravelInspectionData {
   };
 }
 
+export interface ApplyBoeEvidenceSnapshot {
+  lastApplyBoeData: JsonValue[];
+  lastTransData: JsonValue;
+  flowStatus?: JsonValue;
+}
+
 export interface BoeInspectionSnapshot {
   schemaVersion: typeof SNAPSHOT_SCHEMA_VERSION;
   instanceId: string;
@@ -77,10 +83,17 @@ export interface BoeInspectionSnapshot {
     fieldRuntimeStates?: FieldRuntimeState[];
   };
   travel?: TravelInspectionData;
+  applyBoe?: ApplyBoeEvidenceSnapshot;
   warnings?: string[];
 }
 
-export type RuleCategory = 'field-config' | 'travel-standard';
+export type RuleCategory =
+  | 'field-config'
+  | 'travel-standard'
+  | 'validation-rule'
+  | 'calculation-rule'
+  | 'dynamic-rule'
+  | 'apply-boe';
 export type RuleStatus = 'passed' | 'issue' | 'skipped';
 export type RuleSeverity = 'info' | 'warning' | 'error';
 
