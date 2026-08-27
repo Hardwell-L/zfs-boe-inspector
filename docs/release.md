@@ -9,7 +9,7 @@ GitHub 仓库为 `Hardwell-L/zfs-boe-inspector`。npm 只发布以下两个 publ
 
 ## 首次发布与 Trusted Publisher 配置
 
-npm Trusted Publisher 必须绑定一个已经存在的 package。由于这两个 package 是首发版本，需要先在本机通过交互式 2FA 各发布一次；这不是绕过 2FA，也不需要创建长期 Token：
+npm Trusted Publisher 必须绑定一个已经存在的 package。当前两个 package 的 `0.1.0` 首发已完成；如果以后新增 package，需要先通过一次交互式 2FA 首发，这不是绕过 2FA，也不需要创建长期 Token：
 
 ```bash
 npm login

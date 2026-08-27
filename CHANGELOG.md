@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 - 2026-08-27
+
+- 修复 Adapter 发布包中 `workspace:^` 依赖导致 npm 客户端无法安装的问题。
+- npm 发布包改用普通 semver 依赖，兼容 npm、pnpm 和 yarn consumer。
+
 ## 0.1.0 - 2026-08-27
 
 - 提供 Vue3 BOE Runtime Adapter 和只读 Browser Extension。
