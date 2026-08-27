@@ -5,7 +5,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hardwell/zfs-boe-inspector.git",
+    "url": "git+https://github.com/Hardwell-L/zfs-boe-inspector.git",
     "directory": "packages/adapter-vue3"
   },
   "files": [

@@ -6,7 +6,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hardwell/zfs-boe-inspector.git"
+    "url": "git+https://github.com/Hardwell-L/zfs-boe-inspector.git"
   },
   "type": "module",
   "packageManager": "pnpm@10.14.0",

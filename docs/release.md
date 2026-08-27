@@ -1,6 +1,6 @@
 # 发布流程
 
-GitHub 仓库为私有仓库 `hardwell/zfs-boe-inspector`。npm 只发布以下两个 public package：
+GitHub 仓库为私有仓库 `Hardwell-L/zfs-boe-inspector`。npm 只发布以下两个 public package：
 
 - `@zfs-boe-inspector/shared-types`
 - `@zfs-boe-inspector/adapter-vue3`
@@ -9,7 +9,7 @@ GitHub 仓库为私有仓库 `hardwell/zfs-boe-inspector`。npm 只发布以下�
 
 ## 首次配置
 
-1. 在 GitHub 创建 private repository `hardwell/zfs-boe-inspector`。
+1. 在 GitHub 创建 private repository `Hardwell-L/zfs-boe-inspector`。
 2. 在仓库 `Settings > Secrets and variables > Actions` 新增 `NPM_TOKEN`。
 3. Token 必须有发布 `@zfs-boe-inspector` scope public package 的权限；不要把 Token 写入仓库文件。
 
