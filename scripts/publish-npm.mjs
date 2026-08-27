@@ -9,6 +9,10 @@ const packages = [
   '@zfs-boe-inspector/adapter-vue3',
 ];
 
+if (!process.env.NODE_AUTH_TOKEN && !process.env.NPM_TOKEN) {
+  throw new Error('未检测到 NODE_AUTH_TOKEN/NPM_TOKEN，请在 GitHub Actions 配置 NPM_TOKEN');
+}
+
 function packageVersion(packageName) {
   const result = spawnSync(
     'pnpm',
