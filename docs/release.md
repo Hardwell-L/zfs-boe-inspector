@@ -13,9 +13,12 @@ npm Trusted Publisher 必须绑定一个已经存在的 package。当前两个 p
 
 ```bash
 npm login
-(cd packages/shared-types && npm publish --access public)
-(cd packages/adapter-vue3 && npm publish --access public)
+pnpm pack:npm
+npm publish release/npm/zfs-boe-inspector-shared-types-<version>.tgz --access public
+npm publish release/npm/zfs-boe-inspector-adapter-vue3-<version>.tgz --access public
 ```
+
+禁止直接在 workspace package 目录执行 `npm publish`。正式发布和交互式首发都必须发布 `pnpm pack:npm` 生成的 tarball，避免将 `workspace:` 协议写入 registry 元数据。
 
 首发完成后，在 npm 的每个 package 设置中分别添加 Trusted Publisher：
 

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -7,26 +8,21 @@ const registry = 'https://registry.npmjs.org/';
 const packages = [
   {
     name: '@zfs-boe-inspector/shared-types',
-    directory: 'packages/shared-types',
+    manifest: 'packages/shared-types/package.json',
   },
   {
     name: '@zfs-boe-inspector/adapter-vue3',
-    directory: 'packages/adapter-vue3',
+    manifest: 'packages/adapter-vue3/package.json',
   },
 ];
 
-function packageVersion(packageName) {
-  const result = spawnSync(
-    'pnpm',
-    ['--filter', packageName, 'exec', 'node', '-p', 'require("./package.json").version'],
-    { cwd: rootDir, encoding: 'utf8' },
-  );
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    process.stderr.write(result.stderr);
-    process.exit(result.status ?? 1);
-  }
-  return result.stdout.trim();
+function packageVersion(manifestPath) {
+  return JSON.parse(readFileSync(path.join(rootDir, manifestPath), 'utf8')).version;
+}
+
+function tarballPath(packageName, version) {
+  const filename = `${packageName.replace(/^@/, '').replace('/', '-')}-${version}.tgz`;
+  return path.join(rootDir, 'release', 'npm', filename);
 }
 
 function isPublished(packageName, version) {
@@ -43,10 +39,15 @@ function isPublished(packageName, version) {
 }
 
 for (const packageInfo of packages) {
-  const version = packageVersion(packageInfo.name);
+  const version = packageVersion(packageInfo.manifest);
   if (isPublished(packageInfo.name, version)) {
     console.log(`跳过已发布版本：${packageInfo.name}@${version}`);
     continue;
+  }
+
+  const packageTarball = tarballPath(packageInfo.name, version);
+  if (!existsSync(packageTarball)) {
+    throw new Error(`缺少发布包：${path.relative(rootDir, packageTarball)}；请先运行 pnpm pack:npm`);
   }
 
   console.log(`发布 ${packageInfo.name}@${version}（Trusted Publishing OIDC）`);
@@ -54,12 +55,13 @@ for (const packageInfo of packages) {
     'npm',
     [
       'publish',
+      packageTarball,
       '--access',
       'public',
       '--registry',
       registry,
     ],
-    { cwd: path.join(rootDir, packageInfo.directory), stdio: 'inherit' },
+    { cwd: rootDir, stdio: 'inherit' },
   );
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);

@@ -1,6 +1,6 @@
 {
   "name": "@zfs-boe-inspector/adapter-vue3",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "ZFS BOE Vue3 Runtime Adapter 与字段配置采集桥接器",
   "license": "UNLICENSED",
   "repository": {
@@ -39,7 +39,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@zfs-boe-inspector/shared-types": "workspace:^"
+    "@zfs-boe-inspector/shared-types": "^0.2.0"
   },
   "devDependencies": {
     "vue": "3.5.41"

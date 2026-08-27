@@ -46,6 +46,17 @@ assert(extensionPackage.private === true, '@zfs-boe-inspector/extension 必须�
 assert(sharedTypesPackage.private !== true, 'shared-types 必须允许发布');
 assert(adapterPackage.private !== true, 'adapter-vue3 必须允许发布');
 
+for (const manifest of [sharedTypesPackage, adapterPackage]) {
+  for (const dependencyType of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    for (const [dependencyName, specifier] of Object.entries(manifest[dependencyType] ?? {})) {
+      assert(
+        !String(specifier).startsWith('workspace:'),
+        `${manifest.name} 的 ${dependencyType}.${dependencyName} 不能使用 workspace 协议`,
+      );
+    }
+  }
+}
+
 const expectedTag = `v${version}`;
 const currentTag = process.env.GITHUB_REF_TYPE === 'tag'
   ? process.env.GITHUB_REF_NAME

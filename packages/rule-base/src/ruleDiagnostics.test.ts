@@ -12,7 +12,7 @@ function snapshot(): BoeInspectionSnapshot {
     schemaVersion: 1,
     instanceId: 'CL02:1',
     capturedAt: '2026-08-27T00:00:00.000Z',
-    meta: { projectCode: 'demo', environment: 'test', adapterVersion: '0.2.0' },
+    meta: { projectCode: 'demo', environment: 'test', adapterVersion: '0.2.1' },
     runtime: { rawBillData: { boeHeader: [{}] } },
     config: { template: [{ areaCode: 'boeHeader', validateRules: '[invalid', areaFields: [] }] },
   };

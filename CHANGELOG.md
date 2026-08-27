@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 - 2026-08-27
+
+- 修复 `adapter-vue3@0.2.0` 在 npm registry 中残留 `workspace:^`、导致 npm 客户端无法安装的问题。
+- npm 发布流程固定发布 `release/npm` 中的 tarball，并在发布检查中禁止 public package 使用 `workspace:` 协议。
+
 ## 0.1.2 - 2026-08-27
 
 - 新增差旅组件的 Mixin 和 Composition API Composable，自动安装 Inspector Runtime。

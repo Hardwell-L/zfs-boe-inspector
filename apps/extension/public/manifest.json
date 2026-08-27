@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ZFS BOE Inspector",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "只读检查 ZFS BOE 字段、规则、关联申请与差旅标准运行时状态",
   "devtools_page": "devtools.html",
   "side_panel": {

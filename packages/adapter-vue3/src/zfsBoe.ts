@@ -49,7 +49,7 @@ function resolvedOptions(
   const resolved: AdapterOptions = {
     projectCode: options.projectCode ?? inferredProjectCode(),
     environment: options.environment ?? inferredEnvironment(),
-    adapterVersion: options.adapterVersion ?? '0.2.0',
+    adapterVersion: options.adapterVersion ?? '0.2.1',
     zfsPackages: {
       '@zfs/boe': boePackage.version,
       '@zfs/ui-plus': boePackage.dependencies?.['@zfs/ui-plus'] ?? 'unknown',
