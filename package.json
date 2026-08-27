@@ -18,7 +18,7 @@
     "build:packages": "pnpm --filter './packages/**' build",
     "dev": "pnpm --filter @zfs-boe-inspector/extension dev",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "pnpm build:packages && vitest run",
     "test:watch": "vitest",
     "typecheck": "pnpm build:packages && pnpm -r --if-present typecheck",
     "release:check": "node scripts/check-release.mjs",
