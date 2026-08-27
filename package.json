@@ -1,6 +1,6 @@
 {
   "name": "zfs-boe-inspector",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "ZFS BOE 运行时检查与差旅标准诊断工具",
   "license": "UNLICENSED",

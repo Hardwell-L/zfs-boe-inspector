@@ -32,6 +32,30 @@ export default {
 
 两种方式都支持可选的 `projectCode` 等元数据覆盖，并自动管理注册和注销生命周期。
 
+## 差旅组件
+
+差旅单据同样应使用 `zfs-boe` 入口提供的 Mixin 或 Composable，使 Runtime 在采集器注册前自动安装：
+
+```js
+import { createTravelInspectorMixin } from '@zfs-boe-inspector/adapter-vue3/zfs-boe';
+
+export default {
+  mixins: [createTravelInspectorMixin()],
+};
+```
+
+```js
+import { useTravelInspector } from '@zfs-boe-inspector/adapter-vue3/zfs-boe';
+
+export default {
+  setup() {
+    useTravelInspector();
+  },
+};
+```
+
+底层 `attachTravelInspector` 需要先调用 `installBoeInspector` 安装 Runtime，普通 BOE local wrapper 不建议直接调用。
+
 ## License
 
 Proprietary software. See `LICENSE`.

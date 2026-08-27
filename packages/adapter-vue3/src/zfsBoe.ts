@@ -9,9 +9,11 @@ import getDynamicConfig from '@zfs/boe/zfs-boe-core/src/utils/fieldDynamicConfig
 import type {
   AdapterOptions,
   BillTemplateComponentLike,
+  TravelComponentLike,
 } from './collector';
 import {
   attachBillTemplateInspector,
+  attachTravelInspector,
   installBoeInspector,
 } from './index';
 
@@ -20,8 +22,10 @@ declare const process: { env?: { NODE_ENV?: string } } | undefined;
 export type ZfsBoeInspectorOptions = Partial<AdapterOptions>;
 
 type BillTemplateInstance = BillTemplateComponentLike & object;
+type TravelInstance = TravelComponentLike & object;
 
 const registrations = new WeakMap<BillTemplateInstance, () => void>();
+const travelRegistrations = new WeakMap<TravelInstance, () => void>();
 
 function inferredEnvironment(): string {
   if (typeof process !== 'undefined' && process.env?.NODE_ENV) return process.env.NODE_ENV;
@@ -75,6 +79,22 @@ function unregisterBillTemplate(component: BillTemplateInstance) {
   registrations.delete(component);
 }
 
+function registerTravel(
+  component: TravelInstance,
+  options: ZfsBoeInspectorOptions,
+  vueVersion?: string,
+) {
+  if (travelRegistrations.has(component)) return;
+  installBoeInspector(resolvedOptions(options, vueVersion));
+  const dispose = attachTravelInspector(component);
+  travelRegistrations.set(component, dispose);
+}
+
+function unregisterTravel(component: TravelInstance) {
+  travelRegistrations.get(component)?.();
+  travelRegistrations.delete(component);
+}
+
 export function createBillTemplateInspectorMixin(
   options: ZfsBoeInspectorOptions = {},
 ) {
@@ -105,5 +125,38 @@ export function useBillTemplateInspector(
   });
   onBeforeUnmount(() => {
     if (component) unregisterBillTemplate(component);
+  });
+}
+
+export function createTravelInspectorMixin(
+  options: ZfsBoeInspectorOptions = {},
+) {
+  return {
+    mounted(this: TravelInstance) {
+      const vueVersion = (this as TravelInstance & {
+        $?: { appContext?: { app?: { version?: string } } };
+      }).$?.appContext?.app?.version;
+      registerTravel(this, options, vueVersion);
+    },
+    beforeUnmount(this: TravelInstance) {
+      unregisterTravel(this);
+    },
+  };
+}
+
+export function useTravelInspector(
+  options: ZfsBoeInspectorOptions = {},
+): void {
+  const instance = getCurrentInstance();
+  if (!instance) {
+    throw new Error('useTravelInspector 必须在 setup() 中调用');
+  }
+  const component = instance.proxy as TravelInstance | null;
+  onMounted(() => {
+    if (!component) throw new Error('无法获取当前差旅组件实例');
+    registerTravel(component, options, instance.appContext.app.version);
+  });
+  onBeforeUnmount(() => {
+    if (component) unregisterTravel(component);
   });
 }

@@ -1,6 +1,6 @@
 {
   "name": "@zfs-boe-inspector/shared-types",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "ZFS BOE Inspector 的 Snapshot、Bridge 与规则公共类型",
   "license": "UNLICENSED",
   "repository": {

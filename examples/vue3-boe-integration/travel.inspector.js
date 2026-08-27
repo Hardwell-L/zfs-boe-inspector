@@ -1,10 +1,3 @@
-import { attachTravelInspector } from '@zfs-boe-inspector/adapter-vue3';
+import { createTravelInspectorMixin } from '@zfs-boe-inspector/adapter-vue3/zfs-boe';
 
-export const travelInspectorLifecycle = {
-  mounted() {
-    this.disposeTravelInspector = attachTravelInspector(this);
-  },
-  beforeUnmount() {
-    this.disposeTravelInspector?.();
-  },
-};
+export const travelInspectorMixin = createTravelInspectorMixin();

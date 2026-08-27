@@ -62,21 +62,30 @@ createBillTemplateInspectorMixin({
 
 ## 4. NEW_TRAVEL_BOE.vue 注册差旅数据
 
-差旅组件继续使用通用生命周期接口：
+差旅组件应使用 `zfs-boe` 入口提供的 Mixin 或 Composable。它会先安装 Runtime，再注册差旅采集器，避免父组件 mounted 早于 billTemplate 子组件时出现 Runtime 未安装异常：
 
 ```javascript
-import { attachTravelInspector } from '@zfs-boe-inspector/adapter-vue3';
+import { createTravelInspectorMixin } from '@zfs-boe-inspector/adapter-vue3/zfs-boe';
 
 export default {
   // 保留当前 extends、components、beforeSubmit 和其他业务逻辑
-  mounted() {
-    this.disposeTravelInspector = attachTravelInspector(this);
-  },
-  beforeUnmount() {
-    this.disposeTravelInspector?.();
+  mixins: [createTravelInspectorMixin()],
+};
+```
+
+Composition API 使用方式：
+
+```javascript
+import { useTravelInspector } from '@zfs-boe-inspector/adapter-vue3/zfs-boe';
+
+export default {
+  setup() {
+    useTravelInspector();
   },
 };
 ```
+
+底层 `attachTravelInspector()` 仍可使用，但调用前必须先通过 `installBoeInspector()` 安装 Runtime；普通 local wrapper 推荐使用上面的 Mixin 或 Composable。
 
 Adapter 只读取 `calendarData`、`standardAmountParamsObj`、`standardAmount`、`standardDates` 和可用汇总；不会调用 `checkStandard()`。
 
