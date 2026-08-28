@@ -14,6 +14,6 @@
     "service_worker": "assets/background.js",
     "type": "module"
   },
-  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
+  "host_permissions": ["http://*/*", "https://*/*"],
   "permissions": ["storage", "sidePanel", "scripting", "activeTab"]
 }
