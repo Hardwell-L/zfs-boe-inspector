@@ -19,7 +19,7 @@ export default {
 };
 ```
 
-Mixin 会在 `mounted` 后注册最终 `this.template`，并在 `beforeUnmount` 自动注销。
+Mixin 会在 `mounted` 后注册最终 `this.template`，并在 `beforeUnmount` 自动注销。对于标准差旅组件，Adapter 会从 `billTemplate` 向上定位差旅宿主并自动注册 Travel Collector，无需逐个修改差旅 wrapper。
 
 ## 2. Composition API / setup
 
@@ -74,9 +74,24 @@ createBillTemplateInspectorMixin({
 
 未配置回调时仍会展示模板 `dataTrans` 和当前单据值；回调抛错只会写入 Snapshot warning，不影响页面。回调必须直接返回宿主页面已经持有的证据，不应在其中请求接口或重新执行 `transApplyBoeData`。
 
-## 4. NEW_TRAVEL_BOE.vue 注册差旅数据
+## 4. 差旅数据自动注册
 
-差旅组件应使用 `zfs-boe` 入口提供的 Mixin 或 Composable。它会先安装 Runtime，再注册差旅采集器，避免父组件 mounted 早于 billTemplate 子组件时出现 Runtime 未安装异常：
+默认识别以下本地 wrapper 与 `@zfs/boe` 原始组件名称：
+
+- `NEW_TRAVEL_BOE` / `NEWTRAVELBOE`
+- `TRAVEL_BOE` / `TRAVELBOE`
+- `MULTI_TRAVEL_BOE` / `MULTITRAVELBOE`
+- `MULTI_TRIP_TRAVEL_BOE` / `MULTITRIPTRAVELBOE`
+
+若项目的差旅组件名称或组件层级经过定制，可在唯一的 `billTemplate` 接入点指定宿主解析函数：
+
+```javascript
+createBillTemplateInspectorMixin({
+  resolveTravelComponent: (billTemplate) => billTemplate.$parent,
+});
+```
+
+特殊项目可通过 `autoTravelCollector: false` 关闭自动注册。旧项目已有的显式 Travel Mixin 或 Composable 仍兼容，Adapter 会共享同一个 Travel Collector，并在最后一个使用方销毁后注销：
 
 ```javascript
 import { createTravelInspectorMixin } from '@zfs-boe-inspector/adapter-vue3/zfs-boe';
@@ -99,7 +114,7 @@ export default {
 };
 ```
 
-底层 `attachTravelInspector()` 仍可使用，但调用前必须先通过 `installBoeInspector()` 安装 Runtime；普通 local wrapper 推荐使用上面的 Mixin 或 Composable。
+底层 `attachTravelInspector()` 仍可使用，但调用前必须先通过 `installBoeInspector()` 安装 Runtime；普通项目推荐只在 `billTemplate` 使用通用 Mixin 或 Composable。
 
 Adapter 只读取 `calendarData`、`standardAmountParamsObj`、`standardAmount`、`standardDates` 和可用汇总；不会调用 `checkStandard()`。
 

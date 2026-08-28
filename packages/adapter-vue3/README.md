@@ -32,9 +32,19 @@ export default {
 
 两种方式都支持可选的 `projectCode` 等元数据覆盖，并自动管理注册和注销生命周期。关联申请三段对比可选传入 `getApplySnapshot(component)`；未传入时仍保留模板映射和当前值诊断，回调异常只生成采集 warning。
 
-## 差旅组件
+## 差旅组件自动发现
 
-差旅单据同样应使用 `zfs-boe` 入口提供的 Mixin 或 Composable，使 Runtime 在采集器注册前自动安装：
+通用 Mixin 或 Composable 会从 `billTemplate` 向上定位标准差旅宿主，自动注册 Travel Collector。标准项目不需要逐个修改差旅 wrapper。
+
+组件结构经过定制时，可以显式指定差旅宿主：
+
+```js
+createBillTemplateInspectorMixin({
+  resolveTravelComponent: (billTemplate) => billTemplate.$parent,
+});
+```
+
+传入 `autoTravelCollector: false` 可关闭自动发现。旧项目已有的差旅 Mixin 或 Composable 继续兼容：
 
 ```js
 import { createTravelInspectorMixin } from '@zfs-boe-inspector/adapter-vue3/zfs-boe';

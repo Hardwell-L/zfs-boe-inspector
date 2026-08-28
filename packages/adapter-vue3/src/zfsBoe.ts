@@ -6,28 +6,40 @@ import {
 import boePackage from '@zfs/boe/package.json';
 import { areaConfig, fieldConfig } from '@zfs/boe/zfs-boe-core/src/config/boeDesign';
 import getDynamicConfig from '@zfs/boe/zfs-boe-core/src/utils/fieldDynamicConfig';
-import type {
-  AdapterOptions,
-  BillTemplateCollectorOptions,
-  BillTemplateComponentLike,
-  TravelComponentLike,
+import {
+  deriveInstanceId,
+  type AdapterOptions,
+  type BillTemplateCollectorOptions,
+  type BillTemplateComponentLike,
+  type TravelCollectorOptions,
+  type TravelComponentLike,
 } from './collector';
 import {
   attachBillTemplateInspector,
   attachTravelInspector,
   installBoeInspector,
 } from './index';
+import { SharedRegistrationPool } from './sharedRegistration';
+import { findTravelOwner } from './travelOwner';
 
 declare const process: { env?: { NODE_ENV?: string } } | undefined;
 
 export type ZfsBoeInspectorOptions = Partial<AdapterOptions>
-  & Pick<BillTemplateCollectorOptions, 'getApplySnapshot'>;
+  & Pick<BillTemplateCollectorOptions, 'getApplySnapshot'>
+  & {
+    autoTravelCollector?: boolean;
+    resolveTravelComponent?: (
+      component: BillTemplateComponentLike,
+    ) => TravelComponentLike | undefined;
+  };
 
 type BillTemplateInstance = BillTemplateComponentLike & object;
 type TravelInstance = TravelComponentLike & object;
 
 const registrations = new WeakMap<BillTemplateInstance, () => void>();
-const travelRegistrations = new WeakMap<TravelInstance, () => void>();
+const travelRegistrations = new SharedRegistrationPool<TravelInstance>();
+const automaticTravelReleases = new WeakMap<BillTemplateInstance, () => void>();
+const directTravelReleases = new WeakMap<TravelInstance, () => void>();
 
 function inferredEnvironment(): string {
   if (typeof process !== 'undefined' && process.env?.NODE_ENV) return process.env.NODE_ENV;
@@ -49,7 +61,7 @@ function resolvedOptions(
   const resolved: AdapterOptions = {
     projectCode: options.projectCode ?? inferredProjectCode(),
     environment: options.environment ?? inferredEnvironment(),
-    adapterVersion: options.adapterVersion ?? '0.2.1',
+    adapterVersion: options.adapterVersion ?? '0.2.2',
     zfsPackages: {
       '@zfs/boe': boePackage.version,
       '@zfs/ui-plus': boePackage.dependencies?.['@zfs/ui-plus'] ?? 'unknown',
@@ -75,11 +87,47 @@ function registerBillTemplate(
     ...(options.getApplySnapshot ? { getApplySnapshot: options.getApplySnapshot } : {}),
   });
   registrations.set(component, dispose);
+
+  if (options.autoTravelCollector === false) return;
+
+  let travelComponent: TravelComponentLike | undefined;
+  try {
+    travelComponent = options.resolveTravelComponent
+      ? options.resolveTravelComponent(component)
+      : findTravelOwner(component);
+  } catch {
+    return;
+  }
+
+  if (!travelComponent) return;
+
+  const releaseTravel = acquireTravelRegistration(
+    travelComponent,
+    options,
+    vueVersion,
+    () => deriveInstanceId(component),
+  );
+  automaticTravelReleases.set(component, releaseTravel);
 }
 
 function unregisterBillTemplate(component: BillTemplateInstance) {
+  automaticTravelReleases.get(component)?.();
+  automaticTravelReleases.delete(component);
   registrations.get(component)?.();
   registrations.delete(component);
+}
+
+function acquireTravelRegistration(
+  component: TravelInstance,
+  options: ZfsBoeInspectorOptions,
+  vueVersion?: string,
+  getInstanceId?: TravelCollectorOptions['getInstanceId'],
+): () => void {
+  return travelRegistrations.acquire(component, () => {
+    installBoeInspector(resolvedOptions(options, vueVersion));
+    const collectorOptions = getInstanceId ? { getInstanceId } : {};
+    return attachTravelInspector(component, collectorOptions);
+  });
 }
 
 function registerTravel(
@@ -87,15 +135,16 @@ function registerTravel(
   options: ZfsBoeInspectorOptions,
   vueVersion?: string,
 ) {
-  if (travelRegistrations.has(component)) return;
-  installBoeInspector(resolvedOptions(options, vueVersion));
-  const dispose = attachTravelInspector(component);
-  travelRegistrations.set(component, dispose);
+  if (directTravelReleases.has(component)) return;
+  directTravelReleases.set(
+    component,
+    acquireTravelRegistration(component, options, vueVersion),
+  );
 }
 
 function unregisterTravel(component: TravelInstance) {
-  travelRegistrations.get(component)?.();
-  travelRegistrations.delete(component);
+  directTravelReleases.get(component)?.();
+  directTravelReleases.delete(component);
 }
 
 export function createBillTemplateInspectorMixin(

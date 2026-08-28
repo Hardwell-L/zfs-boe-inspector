@@ -56,7 +56,7 @@ export default {
 };
 ```
 
-两种方式都可零参数使用，Adapter 会从当前应用、页面地址和已安装的 `@zfs/boe` 自动读取项目与版本元数据。详细说明见[项目接入](docs/project-integration.md)。
+两种方式都可零参数使用，Adapter 会从当前应用、页面地址和已安装的 `@zfs/boe` 自动读取项目与版本元数据；标准差旅组件也会从 `billTemplate` 的父级链自动发现，无需单独注册。详细说明见[项目接入](docs/project-integration.md)。
 
 ## Workspace
 

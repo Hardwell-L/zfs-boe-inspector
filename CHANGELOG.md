@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 - 2026-08-28
+
+- `billTemplate` Collector 自动识别标准差旅父组件并注册 Travel Collector，业务项目无需逐个修改差旅 wrapper。
+- 自动注册与显式差旅 Mixin/Composable 共享同一 Collector，并通过引用计数安全管理注销生命周期。
+- 新增自动发现开关与自定义差旅宿主解析回调，兼容非标准组件层级。
+
 ## 0.2.1 - 2026-08-27
 
 - 修复 `adapter-vue3@0.2.0` 在 npm registry 中残留 `workspace:^`、导致 npm 客户端无法安装的问题。

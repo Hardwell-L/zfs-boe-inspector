@@ -35,6 +35,15 @@ export interface RuntimeCollector {
 }
 
 export interface BillTemplateComponentLike {
+  $parent?: BillTemplateComponentLike | null;
+  $options?: {
+    name?: string;
+  };
+  $?: {
+    type?: {
+      name?: string;
+    };
+  };
   template?: unknown[];
   data?: Record<string, unknown>;
   billInfo?: Record<string, unknown>;
