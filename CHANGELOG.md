@@ -1,5 +1,10 @@
 # Changelog
 
+## Extension 0.2.3 - 2026-08-28
+
+- 扩展 Side Panel 支持访问任意 HTTP/HTTPS BOE 环境，不再局限于 `localhost` 和 `127.0.0.1`。
+- 增加独立 Extension ZIP 发布流程，不更新或发布 npm 包。
+
 ## 0.2.2 - 2026-08-28
 
 - `billTemplate` Collector 自动识别标准差旅父组件并注册 Travel Collector，业务项目无需逐个修改差旅 wrapper。

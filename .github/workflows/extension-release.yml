@@ -1,0 +1,39 @@
+name: Extension Release
+
+on:
+  push:
+    tags:
+      - 'extension-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:check
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm pack:extension
+      - name: 创建 Extension GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release/*.zip
+          release/*.sha256
+          --generate-notes
+          --title "ZFS BOE Inspector Extension $GITHUB_REF_NAME"

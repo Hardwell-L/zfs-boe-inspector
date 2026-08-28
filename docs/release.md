@@ -50,6 +50,8 @@ pnpm pack:extension
 
 ## 正式发布
 
+### 完整发布
+
 更新所有 package、Extension manifest 和 `CHANGELOG.md` 的版本，提交并推送 `main` 后创建同版本 Tag：
 
 ```bash
@@ -59,6 +61,18 @@ git push origin v0.1.0
 ```
 
 Tag 会触发 Release workflow。流水线先执行完整质量校验，再按依赖顺序使用 Trusted Publishing 发布两个 npm package，最后创建 GitHub Release 并上传 Extension ZIP。相同 npm 版本已存在时会自动跳过，支持失败后重跑。
+
+### 仅发布 Extension
+
+只更新 `apps/extension/package.json`、`apps/extension/public/manifest.json` 和 `CHANGELOG.md`，提交并推送 `main` 后创建 `extension-v<version>` Tag：
+
+```bash
+git tag extension-v0.2.3
+git push origin main
+git push origin extension-v0.2.3
+```
+
+`extension-v*` Tag 会触发独立 Extension Release workflow。流水线执行质量校验、构建 Extension、生成 ZIP 和 SHA-256，并创建 GitHub Release；不会执行 `publish:npm`，也不会更新 npm package。
 
 ## 安装 Extension
 

@@ -29,15 +29,27 @@ const [
   corePackage,
   ruleBasePackage,
   extensionPackage,
+  extensionManifest,
 ] = manifests;
 const version = rootPackage.version;
 
-for (const manifest of manifests) {
+for (const manifest of [
+  rootPackage,
+  sharedTypesPackage,
+  adapterPackage,
+  corePackage,
+  ruleBasePackage,
+]) {
   assert(
     manifest.version === version,
     `${manifest.name ?? 'Chrome Extension'} 版本 ${manifest.version} 与根版本 ${version} 不一致`,
   );
 }
+
+assert(
+  extensionManifest.version === extensionPackage.version,
+  `Chrome Extension manifest 版本 ${extensionManifest.version} 与 package 版本 ${extensionPackage.version} 不一致`,
+);
 
 assert(rootPackage.private === true, '根 workspace 必须保持 private');
 assert(corePackage.private === true, '@zfs-boe-inspector/core 必须保持 private');
@@ -58,13 +70,25 @@ for (const manifest of [sharedTypesPackage, adapterPackage]) {
 }
 
 const expectedTag = `v${version}`;
+const expectedExtensionTag = `extension-v${extensionPackage.version}`;
 const currentTag = process.env.GITHUB_REF_TYPE === 'tag'
   ? process.env.GITHUB_REF_NAME
   : process.argv[2];
 if (currentTag) {
-  assert(currentTag === expectedTag, `Tag ${currentTag} 与版本 ${expectedTag} 不一致`);
+  if (currentTag.startsWith('extension-v')) {
+    assert(
+      currentTag === expectedExtensionTag,
+      `Tag ${currentTag} 与 Extension 版本 ${expectedExtensionTag} 不一致`,
+    );
+  } else {
+    assert(currentTag === expectedTag, `Tag ${currentTag} 与版本 ${expectedTag} 不一致`);
+    assert(
+      extensionPackage.version === version,
+      `完整发布要求 Extension 版本 ${extensionPackage.version} 与根版本 ${version} 一致`,
+    );
+  }
 }
 
-console.log(`发布配置校验通过：${expectedTag}`);
+console.log(`发布配置校验通过：${currentTag ?? `${expectedTag} / ${expectedExtensionTag}`}`);
 console.log('npm 包：@zfs-boe-inspector/shared-types、@zfs-boe-inspector/adapter-vue3');
-console.log('Extension：GitHub Release ZIP');
+console.log(`Extension：GitHub Release ZIP ${extensionPackage.version}`);
