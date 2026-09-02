@@ -1,5 +1,9 @@
 # Changelog
 
+## Extension 0.2.4 - 2026-09-02
+
+- 更新 Runtime Adapter 未接入时的提示，与 `billTemplate.vue` 单点注册和差旅 Collector 自动注册方式保持一致。
+
 ## Extension 0.2.3 - 2026-08-28
 
 - 扩展 Side Panel 支持访问任意 HTTP/HTTPS BOE 环境，不再局限于 `localhost` 和 `127.0.0.1`。
