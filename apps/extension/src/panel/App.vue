@@ -314,7 +314,7 @@ onBeforeUnmount(() => {
     </div>
     <div v-if="!status?.connected && !loading" class="empty-state">
       <h2>尚未检测到 BOE Runtime Adapter</h2>
-      <p>请按项目接入文档在 main.js、billTemplate.vue 和差旅 wrapper 中注册 Inspector。</p>
+      <p>请安装 Adapter，并按项目接入文档在 local billTemplate.vue 中注册 Inspector；标准差旅会自动注册。</p>
     </div>
 
     <div v-else class="workspace">
