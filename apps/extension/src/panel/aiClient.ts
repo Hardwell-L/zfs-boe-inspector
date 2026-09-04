@@ -27,7 +27,12 @@ export async function loadAiSettings(): Promise<AiSettings> {
   const local = await chrome.storage.local.get('aiSettings');
   const session = await chrome.storage.session.get('aiKey');
   const saved = local.aiSettings as Partial<AiSettings> | undefined;
-  return { ...defaultAiSettings, ...saved, maxTokens: Number.isInteger(saved?.maxTokens) && saved!.maxTokens! >= 128 && saved!.maxTokens! <= 65536 ? saved!.maxTokens! : 4096, key: saved?.remember ? saved.key ?? '' : session.aiKey ?? '' };
+  const key = saved?.remember ? saved.key : session.aiKey;
+  return {
+    ...defaultAiSettings, ...saved,
+    maxTokens: Number.isInteger(saved?.maxTokens) && saved!.maxTokens! >= 128 && saved!.maxTokens! <= 65536 ? saved!.maxTokens! : 4096,
+    key: typeof key === 'string' ? key : '',
+  };
 }
 
 export async function saveAiSettings(settings: AiSettings): Promise<void> {

@@ -1,4 +1,4 @@
-import { buildRuleDiagnostics } from '@zfs-boe-inspector/core';
+import { buildRuleDiagnostics, type RuleDiagnosticEntry } from '@zfs-boe-inspector/core';
 import type { BoeInspectionSnapshot, InspectionSelection, RuleEvaluation, TraceSession } from '@zfs-boe-inspector/shared-types';
 
 export type EvidenceGroup = 'selected' | 'dependencies' | 'diagnostics' | 'trace';
@@ -110,7 +110,7 @@ export function buildAiEvidence(
     if (scope.kind === 'area') return row === undefined || !scope.rowIndexes || scope.rowIndexes.includes(row);
     return field === scope.fieldCode && (row === undefined || row === scope.rowIndex);
   });
-  const diagnostics = Object.values(buildRuleDiagnostics(snapshot)).flatMap((model) => model.entries);
+  const diagnostics: RuleDiagnosticEntry[] = Object.values(buildRuleDiagnostics(snapshot)).flatMap((model) => model.entries);
   // 始终与用户原始范围匹配，补充的依赖不会再触发下一轮规则扩散。
   const related = diagnostics.filter((entry) => direct(entry.areaCode ?? '', entry.fieldCode, entry.rowIndex)
     || entry.dependencyDetails?.some((dependency) => direct(dependency.areaCode, dependency.fieldCode)
