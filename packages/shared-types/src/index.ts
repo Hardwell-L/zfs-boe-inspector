@@ -155,9 +155,15 @@ export interface AreaDetail {
   }>;
 }
 
+export interface PickerOptions {
+  continuous?: boolean;
+}
+
 export interface PickerState {
+  targets?: InspectionSelection[];
   active: boolean;
   selection?: FieldSelection;
+  target?: InspectionSelection;
   hoveredDomId?: string;
   error?: string;
 }
@@ -165,12 +171,67 @@ export interface PickerState {
 export interface BridgeStatus {
   apiVersion: typeof BRIDGE_API_VERSION;
   connected: boolean;
+  capabilities?: string[];
   activeInstanceId?: string;
   instances: Array<{
     instanceId: string;
     boeTypeCode?: string;
     sources: string[];
   }>;
+}
+
+export type InspectionSelection =
+  | ({ kind: 'field' } & FieldSelection)
+  | { kind: 'area'; areaCode: string; rowIndexes?: number[] }
+  | { kind: 'bill' };
+
+export interface DependencyDetail {
+  reference: string;
+  areaCode: string;
+  areaName: string;
+  fieldCode: string;
+  fieldName: string;
+  purpose: string;
+  resolution: string;
+  values: Array<{
+    rowIndex: number;
+    status: 'value' | 'missing' | 'unavailable' | 'truncated';
+    value?: JsonValue;
+    description?: JsonValue;
+    evidencePath: string;
+  }>;
+  omittedRows: number;
+}
+
+export interface TraceEvent {
+  id: string;
+  parentId?: string;
+  at: string;
+  method: string;
+  category: string;
+  status: 'returned' | 'threw' | 'pending' | 'observed';
+  input?: JsonValue;
+  output?: JsonValue;
+  before?: JsonValue;
+  after?: JsonValue;
+  error?: string;
+  areaCode?: string;
+  fieldCode?: string;
+  rowIndex?: number;
+}
+
+export interface TraceSession {
+  id: string;
+  instanceId: string;
+  active: boolean;
+  startedAt: string;
+  stoppedAt?: string;
+  reason?: string;
+  events: TraceEvent[];
+  coverage: Array<{ method: string; supported: boolean }>;
+  limitations: string[];
+  startSnapshot: BoeInspectionSnapshot;
+  endSnapshot?: BoeInspectionSnapshot;
 }
 
 export interface ModelInspectionContext {

@@ -1,4 +1,4 @@
-import type { FieldSelection, PickerState } from '@zfs-boe-inspector/shared-types';
+import type { InspectionSelection, PickerOptions, PickerState } from '@zfs-boe-inspector/shared-types';
 import { parseFieldDomId } from './fieldInspector';
 
 const INSPECTOR_Z_INDEX = '2147483647';
@@ -6,7 +6,7 @@ const INSPECTOR_Z_INDEX = '2147483647';
 interface FieldTarget {
   containers: HTMLElement[];
   idElement: HTMLElement;
-  selection: FieldSelection;
+  selection: Exclude<InspectionSelection, { kind: 'bill' }>;
 }
 
 function fieldContainer(element: HTMLElement): HTMLElement {
@@ -16,19 +16,19 @@ function fieldContainer(element: HTMLElement): HTMLElement {
     ?? element;
 }
 
-function targetFromIdElement(idElement: HTMLElement): FieldTarget | undefined {
+function targetFromIdElement(idElement: HTMLElement, root: ParentNode = document): FieldTarget | undefined {
   const selection = parseFieldDomId(idElement.id);
   if (!selection) return undefined;
-  const matchingElements = Array.from(document.querySelectorAll<HTMLElement>(`#${CSS.escape(idElement.id)}`));
+  const matchingElements = Array.from(root.querySelectorAll<HTMLElement>(`#${CSS.escape(idElement.id)}`));
   const containers = [...new Set((matchingElements.length ? matchingElements : [idElement]).map(fieldContainer))];
-  return { containers, idElement, selection };
+  return { containers, idElement, selection: { kind: 'field', ...selection } };
 }
 
-function nearestFieldTarget(target: EventTarget | null): FieldTarget | undefined {
+function nearestFieldTarget(target: EventTarget | null, root: ParentNode = document): FieldTarget | undefined {
   let element = target instanceof Element ? target : undefined;
   while (element && element !== document.body) {
     if (element instanceof HTMLElement && element.id) {
-      const matched = targetFromIdElement(element);
+      const matched = targetFromIdElement(element, root);
       if (matched) return matched;
     }
     element = element.parentElement ?? undefined;
@@ -39,7 +39,7 @@ function nearestFieldTarget(target: EventTarget | null): FieldTarget | undefined
   if (!container) return undefined;
   const idElement = Array.from(container.querySelectorAll<HTMLElement>('[id]'))
     .find(({ id }) => Boolean(parseFieldDomId(id)));
-  return idElement ? targetFromIdElement(idElement) : undefined;
+  return idElement ? targetFromIdElement(idElement, root) : undefined;
 }
 
 function combinedRect(elements: HTMLElement[]): DOMRect | undefined {
@@ -54,6 +54,12 @@ function combinedRect(elements: HTMLElement[]): DOMRect | undefined {
 }
 
 export class FieldPicker {
+  private mode: 'field' | 'area' = 'field';
+  private continuous = false;
+  private targets: FieldTarget['selection'][] = [];
+  private timeoutMs = 30_000;
+  private root: Element | undefined;
+  private areaCodes: string[] | undefined;
   private state: PickerState = { active: false };
   private highlighted: FieldTarget | undefined;
   private overlay: HTMLDivElement | undefined;
@@ -62,11 +68,35 @@ export class FieldPicker {
   private timeout: ReturnType<typeof setTimeout> | undefined;
 
   getState(): PickerState {
-    return { ...this.state };
+    return { ...this.state, ...(this.continuous ? { targets: this.targets.map((target) => ({ ...target })) } : {}) };
+  }
+
+  startSelection(mode: 'field' | 'area', root?: Element, areaCodes?: string[], options?: PickerOptions): PickerState {
+    this.cancel();
+    this.continuous = options?.continuous === true;
+    this.mode = mode;
+    this.root = root;
+    this.areaCodes = areaCodes;
+    return this.start();
+  }
+
+  private target(target: EventTarget | null): FieldTarget | undefined {
+    if (!(target instanceof Element) || (this.root && !this.root.contains(target))) return undefined;
+    if (this.mode === 'field') {
+      const result = nearestFieldTarget(target, this.root ?? document);
+      return result && (!this.areaCodes || this.areaCodes.includes(result.selection.areaCode)) ? result : undefined;
+    }
+    const element = target.closest<HTMLElement>('.bill-area[id]');
+    if (!element || !element.id.endsWith('.billArea')) return undefined;
+    const areaCode = element.id.slice(0, -9);
+    if (this.areaCodes && !this.areaCodes.includes(areaCode)) return undefined;
+    return { containers: [element], idElement: element, selection: { kind: 'area', areaCode } };
   }
 
   start(timeoutMs = 30_000): PickerState {
     this.cancel();
+    this.targets = [];
+    this.timeoutMs = timeoutMs;
     this.state = { active: true };
     this.createInspectorLayers();
     document.addEventListener('mousemove', this.handleMove, true);
@@ -74,7 +104,7 @@ export class FieldPicker {
     document.addEventListener('keydown', this.handleKeydown, true);
     document.addEventListener('scroll', this.handleViewportChange, true);
     window.addEventListener('resize', this.handleViewportChange, true);
-    this.timeout = setTimeout(() => this.finish(undefined, '字段选择已超时'), timeoutMs);
+    this.resetTimeout();
     return this.getState();
   }
 
@@ -83,8 +113,13 @@ export class FieldPicker {
     return this.getState();
   }
 
+  private resetTimeout() {
+    if (this.timeout) clearTimeout(this.timeout);
+    this.timeout = setTimeout(() => this.finish(undefined, this.continuous ? '页面选择已超时，已保留所选项' : '页面选择已超时'), this.timeoutMs);
+  }
+
   private handleMove = (event: MouseEvent) => {
-    const target = nearestFieldTarget(event.target);
+    const target = this.target(event.target);
     if (!target) {
       this.clearHighlight();
       this.state = { active: true };
@@ -97,11 +132,18 @@ export class FieldPicker {
   };
 
   private handleClick = (event: MouseEvent) => {
-    const target = nearestFieldTarget(event.target);
+    const target = this.target(event.target);
     if (!target) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    this.finish(target.selection);
+    if (this.continuous) {
+      const key = (selection: FieldTarget['selection']) => selection.kind === 'field'
+        ? `${selection.areaCode}.${selection.fieldCode}.${selection.rowIndex}` : selection.areaCode;
+      if (!this.targets.some((selection) => key(selection) === key(target.selection))) this.targets.push(target.selection);
+      this.state = { active: true, target: target.selection, hoveredDomId: target.idElement.id };
+      if (this.hint) this.hint.textContent = `已选择 ${this.targets.length} 项 · 继续点击添加 · Esc 完成`;
+      this.resetTimeout();
+    } else this.finish(target.selection);
   };
 
   private handleKeydown = (event: KeyboardEvent) => {
@@ -148,7 +190,7 @@ export class FieldPicker {
 
     this.hint = document.createElement('div');
     this.hint.dataset.zfsBoeInspector = 'field-hint';
-    this.hint.textContent = '选择 BOE 字段 · 点击确认 · Esc 取消';
+    this.hint.textContent = `选择 BOE ${this.mode === 'area' ? '区域' : '字段'} · ${this.continuous ? '连续点击添加 · Esc 完成' : '点击确认 · Esc 取消'}`;
     this.hint.style.cssText = [
       'position:fixed',
       'top:12px',
@@ -172,7 +214,7 @@ export class FieldPicker {
     document.body.append(this.overlay, this.hint);
   }
 
-  private finish(selection?: FieldSelection, error?: string) {
+  private finish(selection?: FieldTarget['selection'], error?: string) {
     document.removeEventListener('mousemove', this.handleMove, true);
     document.removeEventListener('click', this.handleClick, true);
     document.removeEventListener('keydown', this.handleKeydown, true);
@@ -183,7 +225,8 @@ export class FieldPicker {
     this.destroyInspectorLayers();
     this.state = {
       active: false,
-      ...(selection ? { selection } : {}),
+      ...(selection ? { target: selection } : {}),
+      ...(selection?.kind === 'field' ? { selection } : {}),
       ...(error ? { error } : {}),
     };
   }

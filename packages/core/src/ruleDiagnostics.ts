@@ -1,9 +1,12 @@
 import type {
   BoeInspectionSnapshot,
+  DependencyDetail,
   JsonValue,
   RuleCategory,
   RuleSeverity,
 } from '@zfs-boe-inspector/shared-types';
+
+import { describeDependencies } from './dependencies';
 
 export type DiagnosticState = 'ok' | 'issue' | 'unverified';
 
@@ -20,6 +23,7 @@ export interface RuleDiagnosticEntry {
   fieldName?: string;
   rowIndex?: number;
   dependencies?: string[];
+  dependencyDetails?: DependencyDetail[];
   currentValues?: Record<string, JsonValue>;
   evidencePaths: string[];
   technicalDetail?: JsonValue;
@@ -189,11 +193,22 @@ function functionNames(value: unknown): string[] {
 }
 
 function metrics(
+  snapshot: BoeInspectionSnapshot,
   category: RuleDiagnosticModel['category'],
   title: string,
   entries: RuleDiagnosticEntry[],
   truncatedAreas: RuleDiagnosticModel['truncatedAreas'] = [],
 ): RuleDiagnosticModel {
+  for (const entry of entries) {
+    if (!entry.dependencies?.length) continue;
+    entry.dependencyDetails = describeDependencies(snapshot, entry.dependencies, entry);
+    entry.currentValues = Object.fromEntries(entry.dependencyDetails.map((dependency) => [
+      dependency.reference,
+      dependency.values.length === 1 && dependency.values[0]?.status === 'value'
+        ? dependency.values[0].value ?? null
+        : dependency.values.map((value) => ({ rowIndex: value.rowIndex, status: value.status, value: value.value ?? null })),
+    ]));
+  }
   return {
     category,
     title,
@@ -254,11 +269,11 @@ export function buildValidationDiagnostics(snapshot: BoeInspectionSnapshot): Rul
   const headerIndex = snapshot.config.template.findIndex((value) => asRecord(value)?.areaCode === 'boeHeader');
   const header = headerIndex >= 0 ? asRecord(snapshot.config.template[headerIndex]) : undefined;
   if (!header || header.validateRules === undefined || header.validateRules === '') {
-    return metrics('validation-rule', '校验规则', []);
+    return metrics(snapshot, 'validation-rule', '校验规则', []);
   }
   const parsed = parseStructured(header.validateRules);
   if (parsed.error || !Array.isArray(parsed.value)) {
-    return metrics('validation-rule', '校验规则', [{
+    return metrics(snapshot, 'validation-rule', '校验规则', [{
       id: 'VALIDATION_CONFIG_INVALID',
       category: 'validation-rule',
       state: 'issue',
@@ -320,7 +335,7 @@ export function buildValidationDiagnostics(snapshot: BoeInspectionSnapshot): Rul
       },
     }];
   });
-  return metrics('validation-rule', '校验规则', entries);
+  return metrics(snapshot, 'validation-rule', '校验规则', entries);
 }
 
 function findCycle(graph: Map<string, Set<string>>): string[] | undefined {
@@ -357,7 +372,7 @@ export function buildCalculationDiagnostics(snapshot: BoeInspectionSnapshot): Ru
   const entries: RuleDiagnosticEntry[] = [];
 
   for (const item of fields) {
-    const raw = item.field.calculate ?? item.field.computed;
+    const raw = item.field.calculate || item.field.computed;
     if (raw === undefined || raw === '' || raw === null) continue;
     const parsed = parseStructured(raw);
     const dependencies = extractReferences(parsed.value, item.areaCode);
@@ -391,7 +406,7 @@ export function buildCalculationDiagnostics(snapshot: BoeInspectionSnapshot): Ru
         currentValues: currentValues(snapshot, dependencies, rowIndex),
         evidencePaths: [item.path, `runtime.rawBillData.${item.areaCode}.${rowIndex}.${item.fieldCode}`],
         technicalDetail: {
-          type: item.field.calculate !== undefined ? 'calculate' : 'computed',
+          type: item.field.calculate ? 'calculate' : 'computed',
           branches: Array.isArray(parsed.value) ? parsed.value as JsonValue[] : [],
           formula: parsed.value as JsonValue,
           functionNames: functionNames(parsed.value),
@@ -417,7 +432,7 @@ export function buildCalculationDiagnostics(snapshot: BoeInspectionSnapshot): Ru
       technicalDetail: cycle,
     });
   }
-  return metrics('calculation-rule', '计算规则', entries, [...truncatedAreas.values()]);
+  return metrics(snapshot, 'calculation-rule', '计算规则', entries, [...truncatedAreas.values()]);
 }
 
 const DYNAMIC_KEYS = ['show', 'edit', 'requireSet', 'formShow', 'formRequire'] as const;
@@ -512,7 +527,7 @@ export function buildDynamicDiagnostics(snapshot: BoeInspectionSnapshot): RuleDi
       });
     }
   }
-  return metrics('dynamic-rule', '动态规则', entries, [...truncatedAreas.values()]);
+  return metrics(snapshot, 'dynamic-rule', '动态规则', entries, [...truncatedAreas.values()]);
 }
 
 interface ApplyMapping {
@@ -706,7 +721,7 @@ export function buildApplyBoeDiagnostics(snapshot: BoeInspectionSnapshot): RuleD
       },
     });
   }
-  return metrics('apply-boe', '关联申请', entries);
+  return metrics(snapshot, 'apply-boe', '关联申请', entries);
 }
 
 export function buildRuleDiagnostics(snapshot: BoeInspectionSnapshot): RuleDiagnostics {

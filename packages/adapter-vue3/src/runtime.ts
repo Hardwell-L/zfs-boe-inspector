@@ -6,6 +6,9 @@ import {
   type FieldDetail,
   type FieldSelection,
   type PickerState,
+  type PickerOptions,
+  type InspectionSelection,
+  type TraceSession,
 } from '@zfs-boe-inspector/shared-types';
 import {
   mergeContributions,
@@ -14,6 +17,7 @@ import {
 } from './collector';
 import { getAreaDetail, getFieldDetail } from './fieldInspector';
 import { FieldPicker } from './picker';
+import { TraceRecorder, type TraceTarget } from './trace';
 
 export interface BoeInspectorBridge {
   getStatus(): BridgeStatus;
@@ -23,12 +27,19 @@ export interface BoeInspectorBridge {
   startFieldPicker(): PickerState;
   getFieldPickerState(): PickerState;
   cancelFieldPicker(): PickerState;
+  startPicker?(mode: 'field' | 'area', instanceId?: string, options?: PickerOptions): PickerState;
+  locateSelection?(selection: InspectionSelection, instanceId?: string): boolean;
+  startTrace?(instanceId: string): TraceSession;
+  stopTrace?(): TraceSession | undefined;
+  getTrace?(): TraceSession | undefined;
+  clearTrace?(): void;
 }
 
 interface CollectorRegistration {
   token: symbol;
   collector: RuntimeCollector;
   order: number;
+  target?: TraceTarget;
 }
 
 export class BoeInspectorRuntime {
@@ -36,6 +47,7 @@ export class BoeInspectorRuntime {
   private readonly registrations: CollectorRegistration[] = [];
   private readonly picker = new FieldPicker();
   private sequence = 0;
+  private readonly trace = new TraceRecorder((id) => this.getSnapshot(id));
 
   constructor(options: AdapterOptions) {
     this.options = {
@@ -44,12 +56,17 @@ export class BoeInspectorRuntime {
     };
   }
 
-  register(collector: RuntimeCollector): () => void {
+  register(collector: RuntimeCollector, component?: object): () => void {
     const token = Symbol(collector.source);
-    this.registrations.push({ token, collector, order: this.sequence += 1 });
+    this.registrations.push({ token, collector, order: this.sequence += 1,
+      ...(component ? { target: { component, getInstanceId: () => collector.getInstanceId() } } : {}),
+    });
     return () => {
       const index = this.registrations.findIndex((registration) => registration.token === token);
-      if (index >= 0) this.registrations.splice(index, 1);
+      if (index >= 0) {
+        if (this.trace.get()?.instanceId === collector.getInstanceId()) this.trace.stop('组件已注销');
+        this.registrations.splice(index, 1);
+      }
     };
   }
 
@@ -67,6 +84,7 @@ export class BoeInspectorRuntime {
     return {
       apiVersion: BRIDGE_API_VERSION,
       connected: instances.length > 0,
+      capabilities: ['continuous-picker', 'area-picker', 'locate-selection', 'trace'],
       instances,
       ...(activeInstanceId ? { activeInstanceId } : {}),
     };
@@ -90,7 +108,7 @@ export class BoeInspectorRuntime {
   }
 
   startFieldPicker(): PickerState {
-    return this.picker.start();
+    return this.startPicker('field');
   }
 
   getFieldPickerState(): PickerState {
@@ -101,9 +119,50 @@ export class BoeInspectorRuntime {
     return this.picker.cancel();
   }
 
+  private instanceRoot(instanceId?: string): Element | undefined {
+    const groups = this.groupCollectors();
+    const id = instanceId ?? this.activeInstanceId(groups);
+    const registration = (id ? groups.get(id) : undefined)?.find(({ collector, target }) => collector.source === 'bill-template' && target);
+    const element = (registration?.target?.component as { $el?: unknown } | undefined)?.$el;
+    if (element instanceof Element) return element;
+    if (groups.size > 1) throw new Error('无法确定当前单据的页面范围，请从配置列表选择');
+    return undefined;
+  }
+
+  startPicker(mode: 'field' | 'area', instanceId?: string, options?: PickerOptions): PickerState {
+    const snapshot = this.getSnapshot(instanceId);
+    const areaCodes = snapshot.config.template.flatMap((area) => area && typeof area === 'object' && !Array.isArray(area) && typeof area.areaCode === 'string' ? [area.areaCode] : []);
+    return this.picker.startSelection(mode, this.instanceRoot(instanceId), areaCodes, options);
+  }
+
+  locateSelection(selection: InspectionSelection, instanceId?: string): boolean {
+    if (selection.kind === 'bill') return false;
+    const root = this.instanceRoot(instanceId) ?? document;
+    const ids = selection.kind === 'area' ? [`${selection.areaCode}.billArea`] : [
+      selection.domId ?? `${selection.areaCode}.${selection.rowIndex}.${selection.fieldCode}`,
+    ];
+    if (selection.kind === 'field') {
+      const detail = this.getFieldDetail(selection, instanceId);
+      const field = detail?.field as Record<string, unknown> | undefined;
+      if (typeof field?.labelCode === 'string') ids.push(`${selection.areaCode}.${selection.rowIndex}.${field.labelCode}`);
+    }
+    const element = ids.flatMap((id) => Array.from(root.querySelectorAll<HTMLElement>(`[id="${CSS.escape(id)}"]`)))
+      .find((node) => node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0);
+    if (!element) return false;
+    element.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    element.animate([{ outline: '3px solid #635bff' }, { outline: '3px solid transparent' }], { duration: 1600 });
+    return true;
+  }
+
   createBridge(): BoeInspectorBridge {
     return {
       getStatus: () => this.getStatus(),
+      startPicker: (mode, id, options) => this.startPicker(mode, id, options),
+      locateSelection: (selection, id) => this.locateSelection(selection, id),
+      startTrace: (id) => this.trace.start(id, this.registrations.flatMap(({ target }) => target ? [target] : [])),
+      stopTrace: () => this.trace.stop(),
+      getTrace: () => this.trace.get(),
+      clearTrace: () => this.trace.clear(),
       getSnapshot: (instanceId) => this.getSnapshot(instanceId),
       getAreaDetail: (areaCode, instanceId) => this.getAreaDetail(areaCode, instanceId),
       getFieldDetail: (selection, instanceId) => this.getFieldDetail(selection, instanceId),

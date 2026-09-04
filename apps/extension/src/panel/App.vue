@@ -9,6 +9,8 @@ import {
 import { baseRuleEvaluators } from '@zfs-boe-inspector/rule-base';
 import type {
   AreaDetail,
+  DependencyDetail,
+  PickerState,
   BoeInspectionSnapshot,
   BridgeStatus,
   FieldDetail,
@@ -16,10 +18,16 @@ import type {
   InspectionReport,
   JsonValue,
   RuleEvaluation,
+  InspectionSelection,
+  TraceSession,
 } from '@zfs-boe-inspector/shared-types';
 import { pageBridge } from './bridge';
+import { scopeIdentity } from './aiContext';
+import AiPanel from './AiPanel.vue';
+import TracePanel from './TracePanel.vue';
+import { dynamicDisplayModel, hasDisplayText } from './ruleDiagnosticView';
 
-type ViewKey = 'overview' | 'fields' | 'rules' | 'issues' | 'travel' | 'runtime' | 'about';
+type ViewKey = 'overview' | 'fields' | 'rules' | 'issues' | 'travel' | 'runtime' | 'trace' | 'ai';
 type PropertyTab = 'base' | 'advance' | 'data' | 'raw';
 type RuleTab = 'validation' | 'calculation' | 'dynamic' | 'applyBoe';
 
@@ -39,6 +47,15 @@ const pickerActive = ref(false);
 const ruleTab = ref<RuleTab>('validation');
 const onlyRuleIssues = ref(false);
 const showRuleTechnical = ref(false);
+const aiBusy = ref(false);
+const pickerDestination = ref<'fields' | 'ai'>('fields');
+let pickerRun = 0;
+let pickerInstanceId = '';
+let pickerAccepted = new Set<string>();
+const pickerMode = ref<'field' | 'area'>('field');
+const aiScopes = ref<InspectionSelection[]>([]);
+const traceSession = ref<TraceSession>();
+const aiEventId = ref('');
 let pickerTimer: ReturnType<typeof setInterval> | undefined;
 
 const navItems: Array<{ key: ViewKey; label: string }> = [
@@ -48,7 +65,8 @@ const navItems: Array<{ key: ViewKey; label: string }> = [
   { key: 'issues', label: '问题列表' },
   { key: 'travel', label: '差旅标准' },
   { key: 'runtime', label: '运行时数据' },
-  { key: 'about', label: 'AI 预留' },
+  { key: 'trace', label: '过程记录' },
+  { key: 'ai', label: 'AI 分析' },
 ];
 
 const fieldTabs: Array<{ key: PropertyTab; label: string }> = [
@@ -81,7 +99,7 @@ const areas = computed(() => (snapshot.value?.config.template ?? []).flatMap((va
     return [field.fieldCode, field.fieldName, field.labelCode, field.fieldType]
       .some((item) => String(item ?? '').toLowerCase().includes(keyword));
   });
-  if (matchedFields.length === 0) return [];
+  if (keyword && matchedFields.length === 0 && !String(area.areaName ?? area.areaCode).toLowerCase().includes(keyword)) return [];
   return [{ areaIndex, areaCode: String(area.areaCode ?? ''), areaName: String(area.areaName ?? area.areaCode ?? ''), fields: matchedFields }];
 }));
 
@@ -96,7 +114,15 @@ const activePropertyGroup = computed(() => (selectedArea.value?.groups ?? select
   ?.find(({ key }) => key === propertyTab.value));
 const travelView = computed(() => buildTravelView(snapshot.value?.travel));
 const ruleDiagnostics = computed(() => snapshot.value ? buildRuleDiagnostics(snapshot.value) : undefined);
-const activeRuleModel = computed(() => ruleDiagnostics.value?.[ruleTab.value]);
+const activeRuleModel = computed(() => {
+  const model = ruleDiagnostics.value?.[ruleTab.value];
+  return model && ruleTab.value === 'dynamic' ? dynamicDisplayModel(model) : model;
+});
+const unverifiedLabel = computed(() => ruleTab.value === 'calculation' ? '结果待核对' : '未验证');
+const ruleEmptyMessage = computed(() => {
+  if (ruleTab.value === 'dynamic' && !activeRuleModel.value?.metrics.total) return '当前模板没有配置动态显示规则的字段';
+  return onlyRuleIssues.value ? '当前分类没有确定性问题。' : '当前模板没有此类规则配置。';
+});
 const ruleGroups = computed(() => {
   const entries = (activeRuleModel.value?.entries ?? [])
     .filter(({ state }) => !onlyRuleIssues.value || state === 'issue');
@@ -128,12 +154,17 @@ async function refresh() {
   try {
     status.value = await pageBridge.getStatus();
     if (!status.value.connected) {
+      resetSelection();
       snapshot.value = undefined;
       report.value = undefined;
       return;
     }
-    activeInstanceId.value = activeInstanceId.value || status.value.activeInstanceId || status.value.instances[0]?.instanceId || '';
-    snapshot.value = await pageBridge.getSnapshot(activeInstanceId.value || undefined);
+    if (!status.value.instances.some((instance) => instance.instanceId === activeInstanceId.value)) {
+      activeInstanceId.value = status.value.activeInstanceId || status.value.instances[0]?.instanceId || '';
+    }
+    const next = await pageBridge.getSnapshot(activeInstanceId.value || undefined);
+    if (snapshot.value && (snapshot.value.instanceId !== next.instanceId || snapshot.value.meta.projectCode !== next.meta.projectCode)) resetSelection();
+    snapshot.value = next;
     report.value = runInspection(snapshot.value, baseRuleEvaluators);
     if (selectedArea.value) {
       selectedArea.value = await pageBridge.getAreaDetail(selectedArea.value.areaCode, activeInstanceId.value);
@@ -142,17 +173,29 @@ async function refresh() {
       selectedField.value = await pageBridge.getFieldDetail(selectedField.value.selection, activeInstanceId.value);
     }
   } catch (reason) {
+    snapshot.value = undefined;
+    report.value = undefined;
     error.value = reason instanceof Error ? reason.message : String(reason);
   } finally {
     loading.value = false;
   }
 }
 
-async function changeInstance() {
+function resetSelection() {
+  aiScopes.value = [];
+  aiEventId.value = '';
+  traceSession.value = undefined;
   selectedArea.value = undefined;
   selectedField.value = undefined;
   propertyTab.value = 'base';
-  await refresh();
+}
+
+async function changeInstance() {
+  try {
+    if (pickerActive.value) await cancelPicker(false);
+    if (traceSession.value?.active) await pageBridge.stopTrace();
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+  finally { resetSelection(); await refresh(); }
 }
 
 async function selectArea(areaCode: string) {
@@ -193,45 +236,94 @@ async function selectField(selection: FieldSelection, navigate = false) {
         }
       });
     }
+    return detail;
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason);
   }
 }
 
-async function startPicker() {
+async function acceptAiTargets(state: PickerState, run: number) {
+  const targets = state.targets ?? (state.target ? [state.target] : state.selection ? [{ kind: 'field' as const, ...state.selection }] : []);
+  for (const target of targets) {
+    if (run !== pickerRun) return;
+    if (pickerAccepted.has(scopeIdentity(target))) continue;
+    if (target.kind === 'field') {
+      const detail = await pageBridge.getFieldDetail(target, pickerInstanceId);
+      if (run !== pickerRun) return;
+      if (detail) addAiScope({ kind: 'field', ...detail.selection });
+    } else addAiScope(target);
+    pickerAccepted.add(scopeIdentity(target));
+  }
+}
+
+async function startPicker(mode: 'field' | 'area', destination: 'fields' | 'ai' = 'fields') {
+  if (aiBusy.value) return;
+  if (pickerActive.value) await cancelPicker();
+  const run = ++pickerRun;
+  let polling = false;
   try {
     error.value = '';
-    await pageBridge.startFieldPicker();
+    pickerMode.value = mode;
+    pickerDestination.value = destination;
+    pickerInstanceId = activeInstanceId.value;
+    pickerAccepted = new Set();
+    if (destination === 'ai') view.value = 'ai';
+    const modern = status.value?.capabilities?.includes('area-picker');
+    if (!modern && mode === 'area') throw new Error('当前 Adapter 不支持页面区域选择，请升级 Adapter 或从配置列表选择区域');
+    if (modern) await pageBridge.startPicker(mode, pickerInstanceId, {
+      continuous: destination === 'ai' && Boolean(status.value?.capabilities?.includes('continuous-picker')),
+    });
+    else await pageBridge.startFieldPicker();
+    if (run !== pickerRun) return;
     pickerActive.value = true;
     if (pickerTimer) clearInterval(pickerTimer);
     pickerTimer = setInterval(async () => {
+      if (polling) return;
+      polling = true;
       try {
-        const pickerState = await pageBridge.getFieldPickerState();
-        pickerActive.value = pickerState.active;
-        if (!pickerState.active) {
+        const state = await pageBridge.getFieldPickerState();
+        if (run !== pickerRun) return;
+        if (destination === 'ai') await acceptAiTargets(state, run);
+        if (run !== pickerRun) return;
+        pickerActive.value = state.active;
+        if (!state.active) {
           if (pickerTimer) clearInterval(pickerTimer);
           pickerTimer = undefined;
-          if (pickerState.selection) await selectField(pickerState.selection, true);
-          if (pickerState.error) error.value = pickerState.error;
+          const target = state.target ?? (state.selection ? { kind: 'field' as const, ...state.selection } : undefined);
+          if (destination === 'fields' && target?.kind === 'field') {
+            const detail = await selectField(target, true);
+            if (detail) addAiScope({ kind: 'field', ...detail.selection });
+          } else if (destination === 'fields' && target?.kind === 'area') {
+            await selectArea(target.areaCode);
+            addAiScope(target);
+            view.value = 'fields';
+          }
+          if (state.error) error.value = state.error;
         }
       } catch (reason) {
+        if (run !== pickerRun) return;
+        await pageBridge.cancelFieldPicker().catch(() => {});
         pickerActive.value = false;
         if (pickerTimer) clearInterval(pickerTimer);
         pickerTimer = undefined;
         error.value = reason instanceof Error ? reason.message : String(reason);
-      }
+      } finally { polling = false; }
     }, 180);
   } catch (reason) {
+    if (run !== pickerRun) return;
     pickerActive.value = false;
     error.value = reason instanceof Error ? reason.message : String(reason);
   }
 }
 
-async function cancelPicker() {
-  await pageBridge.cancelFieldPicker();
-  pickerActive.value = false;
+async function cancelPicker(keepAiScopes = true) {
+  const run = ++pickerRun;
   if (pickerTimer) clearInterval(pickerTimer);
   pickerTimer = undefined;
+  try {
+    const state = await pageBridge.cancelFieldPicker();
+    if (keepAiScopes && pickerDestination.value === 'ai') await acceptAiTargets(state, run);
+  } finally { pickerActive.value = false; }
 }
 
 function exportReport() {
@@ -253,14 +345,59 @@ function diagnosticClass(entry: RuleDiagnosticEntry) {
   return entry.state === 'issue' ? entry.severity ?? 'error' : entry.state;
 }
 
+function updateAiScopes(scopes: InspectionSelection[]) {
+  if (aiBusy.value) return;
+  aiScopes.value = scopes;
+  aiEventId.value = '';
+}
+
+function addAiScope(selection: InspectionSelection) {
+  if (aiBusy.value || aiScopes.value.some((item) => scopeIdentity(item) === scopeIdentity(selection))) return;
+  aiScopes.value = [...aiScopes.value, selection];
+}
+
+async function locateSelection(selection: InspectionSelection) {
+  try {
+    if (selection.kind === 'field') await selectField(selection, true);
+    else if (selection.kind === 'area') { await selectArea(selection.areaCode); view.value = 'fields'; }
+    if (status.value?.capabilities?.includes('locate-selection')) {
+      const found = await pageBridge.locateSelection(selection, activeInstanceId.value);
+      if (!found) error.value = '配置已打开，当前字段或区域在页面中不可见';
+    }
+  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
+}
+
+function updateTrace(session: TraceSession | undefined) {
+  if (traceSession.value?.id !== session?.id) aiEventId.value = '';
+  traceSession.value = session;
+}
+
+function analyzeTrace(eventId: string, selection?: InspectionSelection) {
+  if (aiBusy.value) return;
+  if (selection) addAiScope(selection);
+  aiEventId.value = eventId;
+  view.value = 'ai';
+}
+
 async function locateDiagnostic(entry: RuleDiagnosticEntry) {
   if (!entry.areaCode || !entry.fieldCode) return;
   await selectField({ areaCode: entry.areaCode, fieldCode: entry.fieldCode, rowIndex: entry.rowIndex ?? 0 }, true);
 }
 
 function propertyValue(value: JsonValue | undefined) {
-  if (value === undefined) return '—';
+  if (value === undefined) return '未采集';
+  if (value === '') return '""（空字符串）';
+  if (value === null) return 'null';
   return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function dependencySummary(dependency: DependencyDetail) {
+  const value = dependency.values[0];
+  if (!value) return '当前值未采集';
+  const text = value.status === 'value' ? propertyValue(value.value) : value.status === 'missing' ? '字段不存在' : value.status === 'truncated' ? '数据已截断' : '未采集';
+  const remaining = dependency.values.length - 1 + dependency.omittedRows;
+  const candidate = dependency.resolution.startsWith('候选') || dependency.resolution.startsWith('汇总');
+  return `${candidate ? '候选值 · ' : ''}第 ${value.rowIndex + 1} 行 · 当前值为：${text}${remaining > 0 ? ` · 另 ${remaining} 行` : ''}`;
 }
 
 function amountValue(value: number | string | undefined, currency = '') {
@@ -270,6 +407,7 @@ function amountValue(value: number | string | undefined, currency = '') {
 
 onMounted(refresh);
 onBeforeUnmount(() => {
+  pickerRun += 1;
   if (pickerTimer) clearInterval(pickerTimer);
   if (pickerActive.value) void pageBridge.cancelFieldPicker();
 });
@@ -284,24 +422,27 @@ onBeforeUnmount(() => {
         <span v-if="snapshot" class="identity">{{ snapshot.meta.boeTypeCode || 'UNKNOWN' }} · {{ snapshot.meta.boeStatus || '—' }}</span>
       </div>
       <div class="actions">
-        <select v-if="status?.instances.length" v-model="activeInstanceId" @change="changeInstance">
+        <select v-if="status?.instances.length" v-model="activeInstanceId" :disabled="aiBusy" @change="changeInstance">
           <option v-for="instance in status.instances" :key="instance.instanceId" :value="instance.instanceId">
             {{ instance.instanceId }}
           </option>
         </select>
-        <button :disabled="loading" @click="refresh">
+        <button :disabled="loading || aiBusy || pickerActive" @click="refresh">
           {{ loading ? '读取中…' : '刷新快照' }}
         </button>
         <button
           v-if="!pickerActive"
           class="picker-toolbar-button"
-          :disabled="!status?.connected"
-          @click="startPicker"
+          :disabled="!status?.connected || aiBusy"
+          @click="startPicker('field')"
         >
           选择页面字段
         </button>
-        <button v-else class="picker-toolbar-button danger" @click="cancelPicker">
-          取消选择
+        <button v-if="!pickerActive" class="picker-toolbar-button" :disabled="!status?.connected || aiBusy" @click="startPicker('area')">
+          选择页面区域
+        </button>
+        <button v-else class="picker-toolbar-button danger" @click="cancelPicker()">
+          {{ pickerDestination === 'ai' ? '完成选择' : '取消选择' }}
         </button>
         <button :disabled="!report" @click="exportReport">
           导出报告
@@ -373,10 +514,10 @@ onBeforeUnmount(() => {
           </aside>
           <section class="property-panel">
             <div v-if="pickerActive" class="picker-tip">
-              请在被检查页面中点击一个 BOE 字段，按 Esc 可取消。
+              请在被检查页面中点击一个 BOE {{ pickerMode === 'area' ? '区域' : '字段' }}，按 Esc 可取消。
             </div>
             <div v-if="!selectedArea && !selectedField" class="placeholder">
-              从左侧列表选择区域或字段，也可以使用“选择页面字段”。
+              从左侧列表选择区域或字段，也可以使用页面选择工具。
             </div>
             <template v-else-if="selectedField">
               <h2>{{ (selectedField.field as any).fieldName || selectedField.selection.fieldCode }}</h2>
@@ -396,6 +537,9 @@ onBeforeUnmount(() => {
               </p>
             </template>
             <template v-if="selectedArea || selectedField">
+              <button @click="selectedField ? addAiScope({ kind: 'field', ...selectedField.selection }) : selectedArea && addAiScope({ kind: 'area', areaCode: selectedArea.areaCode }); view = 'ai'">
+                加入 AI 分析范围
+              </button>
               <div class="property-tabs" role="tablist" :aria-label="selectedArea ? '区域配置分类' : '字段配置分类'">
                 <button
                   v-for="tab in propertyTabs"
@@ -434,7 +578,7 @@ onBeforeUnmount(() => {
             <div>
               <h2>规则诊断</h2>
               <p class="muted">
-                只解析配置与已有运行态证据，不执行校验、计算或关联申请转换。
+                {{ ruleTab === 'calculation' ? '这里展示计算配置和依赖字段的当前值。计算结果是否正确，需要结合页面实际计算过程核对。' : '只解析配置与已有运行态证据，不执行校验、计算或关联申请转换。' }}
               </p>
             </div>
             <div class="rule-switches">
@@ -457,7 +601,7 @@ onBeforeUnmount(() => {
           <div v-if="activeRuleModel" class="metric-grid rule-metrics">
             <article><span>诊断条目</span><strong>{{ activeRuleModel.metrics.total }}</strong></article>
             <article><span>确定问题</span><strong>{{ activeRuleModel.metrics.issues }}</strong></article>
-            <article><span>未验证</span><strong>{{ activeRuleModel.metrics.unverified }}</strong></article>
+            <article><span>{{ unverifiedLabel }}</span><strong>{{ activeRuleModel.metrics.unverified }}</strong></article>
             <article><span>可定位字段</span><strong>{{ activeRuleModel.metrics.locatable }}</strong></article>
           </div>
           <p v-if="activeRuleModel?.truncatedAreas.length" class="truncate-tip">
@@ -476,7 +620,7 @@ onBeforeUnmount(() => {
                 :class="diagnosticClass(entry)"
               >
                 <summary>
-                  <span class="diagnostic-status">{{ entry.state === 'issue' ? '问题' : entry.state === 'unverified' ? '未验证' : '已观察' }}</span>
+                  <span class="diagnostic-status">{{ entry.state === 'issue' ? '问题' : entry.state === 'unverified' ? unverifiedLabel : '已观察' }}</span>
                   <span class="diagnostic-title">{{ entry.summary }}</span>
                   <button
                     v-if="entry.areaCode && entry.fieldCode"
@@ -488,15 +632,36 @@ onBeforeUnmount(() => {
                   </button>
                 </summary>
                 <div class="diagnostic-body">
-                  <p>{{ entry.detail }}</p>
-                  <p v-if="entry.dependencies?.length" class="muted">
-                    依赖：{{ entry.dependencies.join('、') }}
+                  <p v-if="entry.id !== 'CALCULATION_RESULT_UNVERIFIED' || entry.state !== 'unverified'">
+                    {{ entry.detail }}
                   </p>
-                  <dl v-if="entry.currentValues && Object.keys(entry.currentValues).length" class="value-list">
-                    <template v-for="(value, key) in entry.currentValues" :key="key">
-                      <dt>{{ key }}</dt><dd>{{ propertyValue(value) }}</dd>
-                    </template>
-                  </dl>
+                  <details v-for="dependency in entry.dependencyDetails" :key="dependency.reference" class="dependency-detail">
+                    <summary class="dependency-summary">
+                      <span class="dependency-summary-title">{{ dependency.fieldName }}（{{ dependency.reference }}） · {{ dependency.purpose }}</span>
+                      <span class="dependency-summary-value" :title="dependencySummary(dependency)">{{ dependencySummary(dependency) }}</span>
+                    </summary>
+                    <p>{{ dependency.areaName }} · {{ dependency.resolution }}</p>
+                    <div class="value-list">
+                      <div v-for="value in dependency.values" :key="value.rowIndex" class="dependency-value-row">
+                        <div class="dependency-value-content">
+                          <span class="muted">第 {{ value.rowIndex + 1 }} 行 · </span>
+                          当前值为：{{ value.status === 'value' ? propertyValue(value.value) : value.status === 'missing' ? '字段不存在' : value.status === 'truncated' ? '数据已截断' : '未采集' }}
+                          <span v-if="hasDisplayText(value.description, value.value)"> · 显示文本：{{ propertyValue(value.description) }}</span>
+                        </div>
+                        <div class="dependency-value-actions">
+                          <button @click="locateSelection({ kind: 'field', areaCode: dependency.areaCode, fieldCode: dependency.fieldCode, rowIndex: value.rowIndex })">
+                            定位
+                          </button>
+                          <button @click="addAiScope({ kind: 'field', areaCode: dependency.areaCode, fieldCode: dependency.fieldCode, rowIndex: value.rowIndex }); view = 'ai'">
+                            加入 AI
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <p v-if="dependency.omittedRows">
+                      另有 {{ dependency.omittedRows }} 行未展示。
+                    </p>
+                  </details>
                   <template v-if="showRuleTechnical">
                     <p class="evidence-title">
                       证据路径
@@ -512,7 +677,7 @@ onBeforeUnmount(() => {
             </details>
           </div>
           <p v-else class="placeholder">
-            {{ onlyRuleIssues ? '当前分类没有确定性问题。' : '当前模板没有此类规则配置。' }}
+            {{ ruleEmptyMessage }}
           </p>
         </section>
 
@@ -648,11 +813,31 @@ onBeforeUnmount(() => {
           <h3>格式化 DTO <small>({{ snapshot.runtime.formattedDtoStatus }})</small></h3><pre>{{ pretty(snapshot.runtime.formattedBoeDto) }}</pre>
         </section>
 
-        <section v-if="view === 'about'" class="section">
-          <h2>AI 能力预留</h2>
-          <p>首版仅冻结 <code>ModelProvider</code>、上下文和结构化结果协议，不保存 API Key，也不会向任何模型服务发送 BOE 数据。</p>
-          <p>确定性规则是正式诊断结果；未来 AI 结果只作为独立建议展示，不能修改单据或配置。</p>
-        </section>
+        <TracePanel
+          v-show="view === 'trace'"
+          :instance-id="activeInstanceId"
+          :supported="Boolean(status?.capabilities?.includes('trace'))"
+          @update="updateTrace"
+          @analyze="analyzeTrace"
+        />
+
+        <AiPanel
+          v-if="snapshot && report"
+          v-show="view === 'ai'"
+          :snapshot="snapshot"
+          :evaluations="report.evaluations"
+          :scopes="aiScopes"
+          :trace="traceSession"
+          :event-id="aiEventId"
+          :picker-active="pickerActive && pickerDestination === 'ai'"
+          :continuous-picker="Boolean(status?.capabilities?.includes('continuous-picker'))"
+          :area-picker="Boolean(status?.capabilities?.includes('area-picker'))"
+          @pick="startPicker($event, 'ai')"
+          @finish-picker="cancelPicker()"
+          @busy="aiBusy = $event"
+          @scopes="updateAiScopes"
+          @locate="locateSelection"
+        />
       </main>
     </div>
   </div>

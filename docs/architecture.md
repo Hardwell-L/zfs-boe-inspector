@@ -12,9 +12,11 @@ Page Bridge：window.__ZFS_BOE_INSPECTOR__
              ↓ DevTools: chrome.devtools.inspectedWindow.eval
 BOE Inspector Panel
   ├─ Snapshot 展示
-  ├─ 页面字段选择器
+  ├─ 页面字段/区域选择器
+  ├─ 可撤销的方法观察与过程记录
   ├─ 确定性 Rule Engine
-  └─ JSON 报告导出
+  ├─ JSON 报告导出
+  └─ 扩展侧 AI 请求、范围预览与脱敏
 ```
 
 ## 关键决策
@@ -41,7 +43,7 @@ BOE Inspector Panel
 - `checkStandard()`、`beforeSubmit()` 和未知校验函数永不由 Inspector 调用。
 - 校验、计算和关联申请诊断只解析序列化配置，不调用 `validateRuleByDoCalculate`、`getCalculateValue`、`getComputedValue` 或 `transApplyBoeData`。
 - `getDynamicConfig()` 仅允许项目显式传入，并始终接收字段浅拷贝；失败时记录 `evaluationError`。
-- Promise 只记录元数据，API Key 和外部模型调用不存在于首版。
+- Promise 只记录元数据，不附加处理器。AI 请求在扩展侧执行，Key 不进入页面 Bridge；模型只提供建议，不执行代码或修改单据。详见[过程记录与 AI 分析](ai-diagnostics.md)。
 
 ### 规则诊断模型
 

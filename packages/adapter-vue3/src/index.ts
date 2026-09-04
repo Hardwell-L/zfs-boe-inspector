@@ -63,12 +63,12 @@ export function attachBillTemplateInspector(
   component: BillTemplateComponentLike,
   options: BillTemplateCollectorOptions = {},
 ): () => void {
-  return requireRuntime().register(createBillTemplateCollector(component, options));
+  return requireRuntime().register(createBillTemplateCollector(component, options), component);
 }
 
 export function attachTravelInspector(
   component: TravelComponentLike,
   options: TravelCollectorOptions = {},
 ): () => void {
-  return requireRuntime().register(createTravelCollector(component, options));
+  return requireRuntime().register(createTravelCollector(component, options), component);
 }

@@ -35,13 +35,16 @@
 ```typescript
 getStatus()
 getSnapshot(instanceId?)
+getAreaDetail(areaCode, instanceId?)
 getFieldDetail(selection, instanceId?)
 startFieldPicker()
 getFieldPickerState()
 cancelFieldPicker()
 ```
 
-Bridge 不提供 setter、请求重放或任意表达式执行能力。
+新增可选方法包括 `startPicker`、`locateSelection`、`startTrace`、`stopTrace`、`getTrace` 和 `clearTrace`，通过 `BridgeStatus.capabilities` 检测。具体签名与记录边界见[过程记录与 AI 分析](ai-diagnostics.md)。旧接口继续可用。
+
+Bridge 不提供单据 setter、请求重放或任意表达式执行能力。过程控制仅修改 Inspector 自身状态。
 
 ## 规则结果
 

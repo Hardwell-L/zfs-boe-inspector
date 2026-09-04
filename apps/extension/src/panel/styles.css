@@ -117,9 +117,11 @@ h1, h2, h3, p { margin-top: 0; }
 .diagnostic-body { padding: 0 12px 12px; }
 .diagnostic-body code { display: block; margin: 4px 0; color: #5f6572; }
 .diagnostic-body pre { max-height: 260px; }
-.value-list { display: grid; grid-template-columns: minmax(150px, .8fr) 1.2fr; margin: 10px 0; border: 1px solid #e5e7ee; border-radius: 6px; }
-.value-list dt, .value-list dd { margin: 0; padding: 7px 9px; border-bottom: 1px solid #eceef3; overflow-wrap: anywhere; }
-.value-list dt { color: #687187; }
+.value-list { margin: 10px 0; border: 1px solid #e5e7ee; border-radius: 6px; }
+.dependency-value-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 7px 9px; border-bottom: 1px solid #eceef3; }
+.dependency-value-row:last-child { border-bottom: 0; }
+.dependency-value-content { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.dependency-value-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; }
 .evidence-title { margin: 14px 0 6px; font-weight: 600; }
 .travel-business-summary { margin-bottom: 14px; padding: 14px; border: 1px solid #e1e3ea; border-radius: 9px; background: #fff; }
 .travel-business-summary h3 { margin-bottom: 8px; }
@@ -158,4 +160,42 @@ h1, h2, h3, p { margin-top: 0; }
   .person-card { grid-template-columns: 1fr 1fr; }
   .rule-header { display: block; }
   .rule-switches { margin-top: 10px; }
+}
+
+.tool-actions, .scope-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; align-items: center; }
+.tool-actions input, .tool-actions select { padding: 7px; min-width: 140px; }
+.ai-settings { display: grid; gap: 10px; margin-top: 12px; }
+.ai-settings label { display: grid; gap: 5px; }
+.ai-settings input:not([type="checkbox"]), .ai-panel textarea { box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid #d8dce6; border-radius: 6px; font: inherit; }
+.evidence-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 6px 0; border-bottom: 1px solid #eceff4; }
+.ai-preview { max-height: 360px; overflow: auto; white-space: pre-wrap; }
+.ai-answer { margin-top: 16px; padding: 12px; border: 1px solid #dfe3eb; border-radius: 8px; }
+.ai-answer > pre { white-space: pre-wrap; font-family: inherit; }
+.trace-event, .dependency-detail { margin: 8px 0; }
+
+.dependency-summary { list-style: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; cursor: pointer; }
+.dependency-summary::before { content: '▸'; flex: 0 0 auto; }
+.dependency-detail[open] > .dependency-summary::before { content: '▾'; }
+.dependency-summary-title { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+.dependency-summary-value { flex: 0 1 45%; min-width: 0; margin-left: auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #485268; text-align: right; }
+.scope-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 5px 10px; border: 1px solid #d8dce6; border-radius: 16px; background: #f7f8ff; overflow-wrap: anywhere; }
+.scope-chip button { flex: 0 0 auto; border: 0; background: transparent; padding: 2px 5px; }
+.ai-send-summary { padding: 12px; margin: 16px 0; border: 1px solid #dfe3eb; border-radius: 8px; background: #f8f9fc; }
+.ai-send-summary p { margin: 8px 0 0; }
+.ai-send-summary button[aria-pressed="true"] { border-color: #635bff; color: #4c3edb; }
+.ai-markdown { line-height: 1.65; overflow-wrap: anywhere; }
+.ai-markdown p { white-space: pre-wrap; margin: 8px 0; }
+.ai-markdown ul, .ai-markdown ol { padding-left: 24px; }
+.ai-markdown code { background: #f0f2f7; padding: 1px 4px; border-radius: 3px; }
+.ai-markdown pre { overflow: auto; white-space: pre; }
+.ai-markdown pre code { padding: 0; background: transparent; }
+.ai-table { overflow-x: auto; }
+.ai-table th, .ai-table td { padding: 8px; border: 1px solid #e1e3ea; text-align: left; }
+.ai-citation { display: inline; padding: 0 3px; border: 0; color: #5144d4; background: transparent; font: inherit; }
+.ai-citation-detail { margin: 10px 0; padding: 12px; border: 1px solid #dfe3eb; border-radius: 6px; }
+.ai-citation-detail button { margin-left: 10px; }
+.ai-citation-detail pre { max-height: 300px; overflow: auto; white-space: pre-wrap; }
+@media (max-width: 700px) {
+  .dependency-summary-value { flex-basis: 100%; max-width: 100%; }
+  .evidence-row { grid-template-columns: 1fr; }
 }

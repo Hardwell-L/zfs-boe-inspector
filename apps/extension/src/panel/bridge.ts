@@ -5,6 +5,9 @@ import type {
   FieldDetail,
   FieldSelection,
   PickerState,
+  PickerOptions,
+  InspectionSelection,
+  TraceSession,
 } from '@zfs-boe-inspector/shared-types';
 
 type BridgeMethod =
@@ -14,7 +17,8 @@ type BridgeMethod =
   | 'getFieldDetail'
   | 'startFieldPicker'
   | 'getFieldPickerState'
-  | 'cancelFieldPicker';
+  | 'cancelFieldPicker'
+  | 'startPicker' | 'locateSelection' | 'startTrace' | 'stopTrace' | 'getTrace' | 'clearTrace';
 
 interface PageBridgeEnvelope {
   found: boolean;
@@ -119,6 +123,12 @@ async function sidePanelBridgeCall<T>(method: BridgeMethod, args: unknown[]): Pr
 }
 
 export const pageBridge = {
+  startPicker: (mode: 'field' | 'area', id: string, options?: PickerOptions) => bridgeCall<PickerState>('startPicker', [mode, id, options]),
+  locateSelection: (selection: InspectionSelection, id: string) => bridgeCall<boolean>('locateSelection', [selection, id]),
+  startTrace: (id: string) => bridgeCall<TraceSession>('startTrace', [id]),
+  stopTrace: () => bridgeCall<TraceSession | undefined>('stopTrace'),
+  getTrace: () => bridgeCall<TraceSession | undefined>('getTrace'),
+  clearTrace: () => bridgeCall<void>('clearTrace'),
   getStatus: () => bridgeCall<BridgeStatus>('getStatus'),
   getSnapshot: (instanceId?: string) => bridgeCall<BoeInspectionSnapshot>('getSnapshot', instanceId ? [instanceId] : []),
   getAreaDetail: (areaCode: string, instanceId?: string) => bridgeCall<AreaDetail | undefined>(
