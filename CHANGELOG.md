@@ -1,5 +1,12 @@
 # Changelog
 
+## Extension 0.2.5 - 2026-09-04
+
+- 规则依赖标题展示当前值摘要，优化显示文本、计算说明和动态显示规则筛选。
+- 新增 AI 排障与过程分析，支持直接关联证据、请求精简、脱敏、Markdown 回答及引用定位。
+- AI 分析范围支持页面字段和区域连续点选；需配合支持 `continuous-picker` 的 Adapter，旧 Adapter 保留单次选择。
+- 修复 AI 配置读取和诊断列表的 TypeScript 类型检查错误。
+
 ## Extension 0.2.4 - 2026-09-02
 
 - 更新 Runtime Adapter 未接入时的提示，与 `billTemplate.vue` 单点注册和差旅 Collector 自动注册方式保持一致。
