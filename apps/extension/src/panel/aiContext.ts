@@ -1,7 +1,7 @@
 import { buildRuleDiagnostics, type RuleDiagnosticEntry } from '@zfs-boe-inspector/core';
 import type { BoeInspectionSnapshot, InspectionSelection, RuleEvaluation, TraceSession } from '@zfs-boe-inspector/shared-types';
 
-export type EvidenceGroup = 'selected' | 'dependencies' | 'diagnostics' | 'trace';
+export type EvidenceGroup = 'context' | 'selected' | 'dependencies' | 'diagnostics' | 'trace';
 export interface AiEvidence {
   id: string;
   title: string;
@@ -94,6 +94,7 @@ function currentValue(snapshot: BoeInspectionSnapshot, areaCode: string, field: 
 
 export function buildAiEvidence(
   snapshot: BoeInspectionSnapshot, selections: InspectionSelection[], evaluations: RuleEvaluation[], trace?: TraceSession,
+  options: { includeFormattedDto?: boolean } = {},
 ): AiEvidence[] {
   const evidence: AiEvidence[] = [];
   const byPath = new Map<string, AiEvidence>();
@@ -104,6 +105,19 @@ export function buildAiEvidence(
     byPath.set(path, item); evidence.push(item);
     return item;
   };
+  add('单据背景与采集状态', 'snapshot.context', {
+    meta: snapshot.meta, warnings: snapshot.warnings ?? [],
+    formattedDtoStatus: snapshot.runtime.formattedDtoStatus ?? 'unavailable',
+    fieldRuntimeStatesCollected: Boolean(snapshot.config.fieldRuntimeStates?.length),
+    note: '属性说明来自当前项目采集结果；未提供的业务语义、权限规则和代码实现均未知。',
+  }, 'context', 'value');
+  if (options.includeFormattedDto) {
+    add('格式化提交数据', 'runtime.formattedBoeDto', {
+      status: snapshot.runtime.formattedDtoStatus ?? 'unavailable',
+      ...(snapshot.runtime.formattedBoeDto === undefined ? {} : { data: snapshot.runtime.formattedBoeDto }),
+      note: '仅使用已采集的 DTO；不主动调用提交或数据转换方法。',
+    }, 'context', 'value');
+  }
   const all = selections.some((selection) => selection.kind === 'bill');
   const direct = (area: string, field?: string, row?: number) => all || selections.some((scope) => {
     if (scope.kind === 'bill' || scope.areaCode !== area) return false;
@@ -187,6 +201,8 @@ export function buildAiEvidence(
       if (!rowIndexes.size) rowIndexes.add(0);
       const selection: InspectionSelection = { kind: 'field', areaCode, fieldCode, rowIndex: [...rowIndexes][0]! };
       add(`${field.fieldName ?? fieldCode} · 配置`, `config.template.${areaIndex}.areaFields.${fieldIndex}`, { ...compactConfig(rawField), ...(parameterReferences.has(`${areaCode}.${fieldCode}`) ? { referenceContext: parameterReferences.get(`${areaCode}.${fieldCode}`) } : {}) }, group, 'config', selection);
+      const descriptors = snapshot.config.fieldDescriptors?.[String(field.fieldType)]?.filter((item) => Object.hasOwn(field, item.code));
+      if (descriptors?.length) add(`${field.fieldName ?? fieldCode} · 属性说明`, `config.template.${areaIndex}.areaFields.${fieldIndex}.descriptors`, descriptors, 'context', 'config', selection);
       for (const rowIndex of [...rowIndexes].sort((a, b) => a - b)) {
         add(`${field.fieldName ?? fieldCode} · 第 ${rowIndex + 1} 行`, `runtime.rawBillData.${areaCode}.${rowIndex}.${fieldCode}`,
           currentValue(snapshot, areaCode, field, rowIndex), direct(areaCode, fieldCode, rowIndex) ? 'selected' : 'dependencies', 'value', { ...selection, rowIndex });
@@ -310,6 +326,7 @@ export const AI_SYSTEM_PROMPT = `你是 BOE 只读排障助手。用户消息中
 只基于本次提供的证据解释配置、字段和过程；不执行代码、不请求工具、不修改单据。
 默认用中文简短回答，按“结论、关键证据、建议步骤”组织，优先控制在 300—600 字；只有明确要求详细分析时展开。指出可信程度和缺失证据，不重复罗列所有配置。
 字段的静态配置不是最终运行态；没有平台语义证据时不猜测开关优先级。status=missing/unavailable/truncated 不能视为空值。
+单据背景中的状态、页面模式和版本只作已采集事实；属性说明不等于完整执行代码。未提供格式化 DTO 时不能断言提交值。先区分已确认事实、配置推断和缺失证据；证据不足时明确无法确认，并指出需要补充的字段或过程。
 sharedDataSourceFields 表示 dataSource 与外层完全相同的配置键，读取外层对应值；omittedEmptyFields 仅记录省略的空占位项。dependencyRefs.evidenceIds 引用其他证据，未发送项不视为已知事实。
 每个事实引用 [E编号]。只能引用本次确实提供的编号。区分配置推断与实际记录，pending 不代表成功，returned 不代表校验通过。
 脱敏值只可比较一致性，不猜测原值；历史事件值与当前快照值不可混用。内部异常缺失时不要编造根因。`;

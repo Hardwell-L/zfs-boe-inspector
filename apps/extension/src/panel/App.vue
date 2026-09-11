@@ -48,6 +48,8 @@ const ruleTab = ref<RuleTab>('validation');
 const onlyRuleIssues = ref(false);
 const showRuleTechnical = ref(false);
 const aiBusy = ref(false);
+const aiPanel = ref<InstanceType<typeof AiPanel>>();
+const aiAnalysisId = ref(0);
 const pickerDestination = ref<'fields' | 'ai'>('fields');
 let pickerRun = 0;
 let pickerInstanceId = '';
@@ -291,11 +293,9 @@ async function startPicker(mode: 'field' | 'area', destination: 'fields' | 'ai' 
           pickerTimer = undefined;
           const target = state.target ?? (state.selection ? { kind: 'field' as const, ...state.selection } : undefined);
           if (destination === 'fields' && target?.kind === 'field') {
-            const detail = await selectField(target, true);
-            if (detail) addAiScope({ kind: 'field', ...detail.selection });
+            await selectField(target, true);
           } else if (destination === 'fields' && target?.kind === 'area') {
             await selectArea(target.areaCode);
-            addAiScope(target);
             view.value = 'fields';
           }
           if (state.error) error.value = state.error;
@@ -348,12 +348,46 @@ function diagnosticClass(entry: RuleDiagnosticEntry) {
 function updateAiScopes(scopes: InspectionSelection[]) {
   if (aiBusy.value) return;
   aiScopes.value = scopes;
-  aiEventId.value = '';
 }
 
 function addAiScope(selection: InspectionSelection) {
   if (aiBusy.value || aiScopes.value.some((item) => scopeIdentity(item) === scopeIdentity(selection))) return;
   aiScopes.value = [...aiScopes.value, selection];
+}
+
+async function openAiConversation(selection?: InspectionSelection, append = false, eventId = '') {
+  if (aiBusy.value || loading.value) return;
+  if (pickerActive.value) {
+    try { await cancelPicker(false); }
+    catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); return; }
+  }
+  if (aiBusy.value || loading.value) return;
+  if (append) {
+    if (selection) addAiScope(selection);
+  } else {
+    aiScopes.value = selection ? [selection] : [];
+    aiEventId.value = eventId;
+    aiAnalysisId.value += 1;
+  }
+  view.value = 'ai';
+  await nextTick();
+  aiPanel.value?.showConversation();
+}
+
+async function refreshAiSnapshot() {
+  if (loading.value || pickerActive.value) throw new Error('请等待当前读取或页面选择结束');
+  const instanceId = activeInstanceId.value;
+  const projectCode = snapshot.value?.meta.projectCode;
+  loading.value = true;
+  try {
+    const next = await pageBridge.getSnapshot(instanceId);
+    if (activeInstanceId.value !== instanceId || next.instanceId !== instanceId || next.meta.projectCode !== projectCode) {
+      throw new Error('单据实例已变化，请重新选择单据后开始分析');
+    }
+    const nextReport = runInspection(next, baseRuleEvaluators);
+    snapshot.value = next;
+    report.value = nextReport;
+  } finally { loading.value = false; }
 }
 
 async function locateSelection(selection: InspectionSelection) {
@@ -374,9 +408,7 @@ function updateTrace(session: TraceSession | undefined) {
 
 function analyzeTrace(eventId: string, selection?: InspectionSelection) {
   if (aiBusy.value) return;
-  if (selection) addAiScope(selection);
-  aiEventId.value = eventId;
-  view.value = 'ai';
+  void openAiConversation(selection, false, eventId);
 }
 
 async function locateDiagnostic(entry: RuleDiagnosticEntry) {
@@ -466,7 +498,7 @@ onBeforeUnmount(() => {
         </button>
       </nav>
 
-      <main class="content">
+      <main class="content" :class="{ 'content-ai': view === 'ai' }">
         <section v-if="view === 'overview' && snapshot" class="section">
           <h2>单据概览</h2>
           <div class="metric-grid">
@@ -537,8 +569,11 @@ onBeforeUnmount(() => {
               </p>
             </template>
             <template v-if="selectedArea || selectedField">
-              <button @click="selectedField ? addAiScope({ kind: 'field', ...selectedField.selection }) : selectedArea && addAiScope({ kind: 'area', areaCode: selectedArea.areaCode }); view = 'ai'">
-                加入 AI 分析范围
+              <button @click="selectedField ? openAiConversation({ kind: 'field', ...selectedField.selection }) : selectedArea && openAiConversation({ kind: 'area', areaCode: selectedArea.areaCode })">
+                新建 AI 分析
+              </button>
+              <button @click="selectedField ? openAiConversation({ kind: 'field', ...selectedField.selection }, true) : selectedArea && openAiConversation({ kind: 'area', areaCode: selectedArea.areaCode }, true)">
+                追加到当前 AI 分析
               </button>
               <div class="property-tabs" role="tablist" :aria-label="selectedArea ? '区域配置分类' : '字段配置分类'">
                 <button
@@ -652,8 +687,11 @@ onBeforeUnmount(() => {
                           <button @click="locateSelection({ kind: 'field', areaCode: dependency.areaCode, fieldCode: dependency.fieldCode, rowIndex: value.rowIndex })">
                             定位
                           </button>
-                          <button @click="addAiScope({ kind: 'field', areaCode: dependency.areaCode, fieldCode: dependency.fieldCode, rowIndex: value.rowIndex }); view = 'ai'">
-                            加入 AI
+                          <button @click="openAiConversation({ kind: 'field', areaCode: dependency.areaCode, fieldCode: dependency.fieldCode, rowIndex: value.rowIndex })">
+                            新建 AI 分析
+                          </button>
+                          <button @click="openAiConversation({ kind: 'field', areaCode: dependency.areaCode, fieldCode: dependency.fieldCode, rowIndex: value.rowIndex }, true)">
+                            追加到当前分析
                           </button>
                         </div>
                       </div>
@@ -824,6 +862,11 @@ onBeforeUnmount(() => {
         <AiPanel
           v-if="snapshot && report"
           v-show="view === 'ai'"
+          ref="aiPanel"
+          :active="view === 'ai'"
+          :analysis-id="aiAnalysisId"
+          :refreshing="loading"
+          :refresh-snapshot="refreshAiSnapshot"
           :snapshot="snapshot"
           :evaluations="report.evaluations"
           :scopes="aiScopes"
@@ -836,6 +879,8 @@ onBeforeUnmount(() => {
           @finish-picker="cancelPicker()"
           @busy="aiBusy = $event"
           @scopes="updateAiScopes"
+          @new-analysis="openAiConversation()"
+          @clear-event="aiEventId = ''"
           @locate="locateSelection"
         />
       </main>
