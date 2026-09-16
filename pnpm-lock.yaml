@@ -61,7 +61,7 @@ importers:
   packages/adapter-vue3:
     dependencies:
       '@zfs-boe-inspector/shared-types':
-        specifier: ^0.2.2
+        specifier: ^0.2.3
         version: link:../shared-types
     devDependencies:
       vue:
