@@ -62,6 +62,19 @@ git push origin v0.1.0
 
 Tag 会触发 Release workflow。流水线先执行完整质量校验，再按依赖顺序使用 Trusted Publishing 发布两个 npm package，最后创建 GitHub Release 并上传 Extension ZIP。相同 npm 版本已存在时会自动跳过，支持失败后重跑。
 
+### 仅发布 npm
+
+更新根 package、`packages/*/package.json`、Adapter 默认上报版本、lockfile 和 `CHANGELOG.md`，保持 Extension 版本不变。检查并提交推送后，使用独立 npm Tag：
+
+```bash
+pnpm release:check npm-v0.2.3
+pnpm pack:npm
+git tag npm-v0.2.3
+git push origin npm-v0.2.3
+```
+
+`npm-v*` Tag 使用同一个 `release.yml` 和 Trusted Publisher 配置，执行完整质量校验，按依赖顺序发布两个 npm 包，并将 tarball 上传到 GitHub Release。不会打包或发布 Extension。`v*` 完整发布仍要求 npm 与 Extension 版本一致。
+
 ### 仅发布 Extension
 
 只更新 `apps/extension/package.json`、`apps/extension/public/manifest.json` 和 `CHANGELOG.md`，提交并推送 `main` 后创建 `extension-v<version>` Tag：

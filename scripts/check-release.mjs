@@ -70,6 +70,7 @@ for (const manifest of [sharedTypesPackage, adapterPackage]) {
 }
 
 const expectedTag = `v${version}`;
+const expectedNpmTag = `npm-v${version}`;
 const expectedExtensionTag = `extension-v${extensionPackage.version}`;
 const currentTag = process.env.GITHUB_REF_TYPE === 'tag'
   ? process.env.GITHUB_REF_NAME
@@ -80,6 +81,8 @@ if (currentTag) {
       currentTag === expectedExtensionTag,
       `Tag ${currentTag} 与 Extension 版本 ${expectedExtensionTag} 不一致`,
     );
+  } else if (currentTag.startsWith('npm-v')) {
+    assert(currentTag === expectedNpmTag, `Tag ${currentTag} 与 npm 版本 ${expectedNpmTag} 不一致`);
   } else {
     assert(currentTag === expectedTag, `Tag ${currentTag} 与版本 ${expectedTag} 不一致`);
     assert(

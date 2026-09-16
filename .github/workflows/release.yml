@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+      - 'npm-v*'
 
 permissions:
   contents: write
@@ -33,12 +34,23 @@ jobs:
       - name: 使用 Trusted Publishing 发布 npm 包
         run: pnpm publish:npm
       - run: pnpm pack:extension
+        if: ${{ !startsWith(github.ref_name, 'npm-v') }}
       - name: 创建 GitHub Release
+        if: ${{ !startsWith(github.ref_name, 'npm-v') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
           release/*.zip
           release/*.sha256
+          --generate-notes
+          --title "ZFS BOE Inspector $GITHUB_REF_NAME"
+      - name: 创建 npm GitHub Release
+        if: ${{ startsWith(github.ref_name, 'npm-v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release/npm/*.tgz
           --generate-notes
           --title "ZFS BOE Inspector $GITHUB_REF_NAME"
