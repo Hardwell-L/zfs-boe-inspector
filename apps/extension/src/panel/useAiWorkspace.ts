@@ -1,8 +1,8 @@
 import { computed, markRaw, onBeforeUnmount, reactive, watch } from 'vue';
 import type { BoeInspectionSnapshot, InspectionSelection, RuleEvaluation, TraceSession } from '@zfs-boe-inspector/shared-types';
 import { AI_SYSTEM_PROMPT, buildAiEvidence, createRedactor, scopeIdentity, scopeLabel, type AiEvidence } from './aiContext';
-import { aiRequestBody, defaultAiSettings, loadAiSettings, saveAiSettings, streamAnswer, testAiConnection, type AiSettings, type ChatMessage, type StreamResult } from './aiClient';
-import { bytes, recentHistory, REQUEST_LIMIT, sentEvidence } from './aiConversation';
+import { aiRequestBody, defaultAiSettings, loadAiSettings, saveAiSettings, streamAnswer, testAiConnection, validateRequestLimit, type AiSettings, type ChatMessage, type StreamResult } from './aiClient';
+import { bytes, recentHistory, sentEvidence } from './aiConversation';
 import { scopeIssues } from './aiScopes';
 import { deleteAiHistory, historyFromSession, loadAiHistory, saveAiHistory, type AiHistory } from './aiHistory';
 
@@ -28,6 +28,7 @@ export const sourceIdentity = (source: AiSource) => JSON.stringify([source.pageI
   source.snapshot.instanceId.endsWith(':active') ? source.snapshot.runtime.rawBillData : null]);
 const evidenceIdentity = (item: AiEvidence) => JSON.stringify([item.path, item.kind, item.selection ? scopeIdentity(item.selection) : '']);
 const message = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
+const requestLimitLabel = (bytesValue: number) => `${Math.round(bytesValue / 1000)} KB`;
 
 export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSource>) {
   const initialState = {
@@ -274,7 +275,8 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
   }
   async function generate(answer: AiAnswer, settings: AiSettings, messages: ChatMessage[], request: ActiveRequest) {
     const body = aiRequestBody(settings, messages);
-    if (bytes(body) > REQUEST_LIMIT) throw new Error('请求超过 150 KB，请缩小范围');
+    validateRequestLimit(settings.maxRequestBytes);
+    if (bytes(body) > settings.maxRequestBytes) throw new Error(`请求超过 ${requestLimitLabel(settings.maxRequestBytes)}，请缩小范围`);
     if (!live(request)) return;
     state.request!.phase = 'generating'; answer.status = 'streaming'; answer.error = ''; answer.requests.push(clone(body));
     if (settings.key.trim()) historySecrets.add(settings.key.trim());
@@ -292,6 +294,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     const settings = { ...state.settings };
     const draft = session.draft;
     try {
+      validateRequestLimit(settings.maxRequestBytes);
       if (!await updateSnapshot(session, request)) return;
       const issues = scopeIssues(session.source.snapshot, session.scopes);
       if (issues.length) throw new Error(issues.join('；'));
@@ -299,7 +302,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
       reconcile(session, settings);
       const prepared = requestView(session, settings);
       if (!prepared.evidence.length) throw new Error('请选择至少一项发送证据');
-      if (bytes(prepared.body) > REQUEST_LIMIT) throw new Error('请求超过 150 KB，请调整范围后重新发送');
+      if (bytes(prepared.body) > settings.maxRequestBytes) throw new Error(`请求超过 ${requestLimitLabel(settings.maxRequestBytes)}，请调整范围后重新发送`);
       session.answers.push({ id: ++answerSequence, context: session.context, sentAt: new Date().toISOString(), capturedAt: session.source.snapshot.capturedAt,
         question: prepared.question, answer: '', status: 'streaming', error: '', evidence: clone(prepared.evidence), scopes: prepared.scopes,
         service: { model: settings.model, baseUrl: settings.baseUrl, maxTokens: settings.maxTokens }, baseMessages: clone(prepared.body.messages), requests: [], omitted: prepared.omitted });
@@ -332,7 +335,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     for (const session of state.sessions) session.conditionsChanged = true;
     if (state.closed) state.closed.session.conditionsChanged = true;
   }, { flush: 'sync' });
-  watch(() => [state.settings.baseUrl, state.settings.model, state.settings.key, state.settings.maxTokens], () => {
+  watch(() => [state.settings.baseUrl, state.settings.model, state.settings.key, state.settings.maxTokens, state.settings.maxRequestBytes], () => {
     testSequence += 1; state.test = { status: 'idle', message: '' };
   }, { flush: 'sync' });
   async function load() {

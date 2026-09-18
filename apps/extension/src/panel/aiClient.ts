@@ -4,12 +4,18 @@ export interface AiSettings {
   key: string;
   remember: boolean;
   maxTokens: number;
+  maxRequestBytes: number;
 }
 
 export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string }
 
+export const DEFAULT_REQUEST_BYTES = 150_000;
+export const MIN_REQUEST_BYTES = 32_000;
+export const MAX_REQUEST_BYTES = 2_000_000;
+
 export const defaultAiSettings: AiSettings = {
   baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4-flash', key: '', remember: false, maxTokens: 4096,
+  maxRequestBytes: DEFAULT_REQUEST_BYTES,
 };
 
 function endpoint(settings: AiSettings, path: string): string {
@@ -31,6 +37,8 @@ export async function loadAiSettings(): Promise<AiSettings> {
   return {
     ...defaultAiSettings, ...saved,
     maxTokens: Number.isInteger(saved?.maxTokens) && saved!.maxTokens! >= 128 && saved!.maxTokens! <= 65536 ? saved!.maxTokens! : 4096,
+    maxRequestBytes: Number.isInteger(saved?.maxRequestBytes) && saved!.maxRequestBytes! >= MIN_REQUEST_BYTES && saved!.maxRequestBytes! <= MAX_REQUEST_BYTES
+      ? saved!.maxRequestBytes! : DEFAULT_REQUEST_BYTES,
     key: typeof key === 'string' ? key : '',
   };
 }
@@ -38,6 +46,7 @@ export async function loadAiSettings(): Promise<AiSettings> {
 export async function saveAiSettings(settings: AiSettings): Promise<void> {
   endpoint(settings, 'chat/completions');
   validateOutputLimit(settings.maxTokens);
+  validateRequestLimit(settings.maxRequestBytes);
   await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
   await chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
   await chrome.storage.local.set({ aiSettings: { ...settings, key: settings.remember ? settings.key : '' } });
@@ -90,6 +99,12 @@ export interface StreamResult {
 
 function validateOutputLimit(value: number) {
   if (!Number.isInteger(value) || value < 128 || value > 65536) throw new Error('输出上限请输入 128—65536 的整数，实际支持范围取决于模型');
+}
+
+export function validateRequestLimit(value: number) {
+  if (!Number.isInteger(value) || value < MIN_REQUEST_BYTES || value > MAX_REQUEST_BYTES) {
+    throw new Error(`请求体上限请输入 ${MIN_REQUEST_BYTES / 1000}—${MAX_REQUEST_BYTES / 1000} KB 的整数`);
+  }
 }
 
 export function aiRequestBody(settings: Pick<AiSettings, 'model' | 'maxTokens'>, messages: ChatMessage[]) {

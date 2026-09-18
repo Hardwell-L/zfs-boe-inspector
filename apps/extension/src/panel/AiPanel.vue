@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import type { InspectionSelection } from '@zfs-boe-inspector/shared-types';
 import { scopeIdentity, scopeLabel, type EvidenceGroup } from './aiContext';
-import { bytes, REQUEST_LIMIT } from './aiConversation';
+import { bytes } from './aiConversation';
 import { scopeIssues } from './aiScopes';
 import { formatLocalDateTime } from './time';
 import type { AiAnswer, AiWorkspace } from './useAiWorkspace';
@@ -24,6 +24,12 @@ const draftLocked = computed(() => Boolean(ownRequest.value) || props.pickerActi
 const preview = computed(() => session.value ? workspace.requestView(session.value) : undefined);
 const byteCount = computed(() => preview.value ? bytes(preview.value.body) : 0);
 const invalidScopes = computed(() => session.value ? scopeIssues(session.value.source.snapshot, session.value.scopes) : []);
+const selectedScopes = computed(() => {
+  const owner = session.value;
+  const sourceSnapshot = snapshot.value;
+  if (!owner || !sourceSnapshot) return [];
+  return owner.scopes.map((scope) => ({ scope, key: scopeIdentity(scope), label: scopeLabel(sourceSnapshot, scope) }));
+});
 const valueSummary = computed(() => {
   const values = session.value?.evidence.filter((item) => item.kind === 'value' && item.selection?.kind === 'field') ?? [];
   const present = values.filter((item) => item.included && (item.value as { status?: string }).status === 'present').length;
@@ -71,6 +77,10 @@ function renameKeydown(event: InstanceType<typeof window.KeyboardEvent>) {
 const modelPreset = computed({
   get: () => ['deepseek-v4-flash', 'deepseek-v4-pro'].includes(state.settings.model) ? state.settings.model : 'custom',
   set: (value: string) => { if (value !== 'custom') state.settings.model = value; else state.settings.model = ''; },
+});
+const requestLimitKb = computed({
+  get: () => Math.round(state.settings.maxRequestBytes / 1000),
+  set: (value: number) => { state.settings.maxRequestBytes = Math.round(value * 1000); },
 });
 function setScopes(scopes: InspectionSelection[]) { if (session.value) workspace.setScopes(session.value, scopes); }
 function toggleGroup(key: EvidenceGroup) {
@@ -217,6 +227,19 @@ function statusText(answer: AiAnswer) {
     </div>
     <div v-if="session" v-show="state.tab === 'conversation'" id="ai-conversation" class="ai-conversation" role="tabpanel" :aria-labelledby="`ai-session-${session.id}`">
       <div ref="conversationScroll" class="ai-conversation-scroll" @scroll="trackScroll">
+        <section v-if="selectedScopes.length" class="ai-scope-summary" aria-label="已选字段或区域">
+          <header>
+            <strong>已选字段/区域</strong>
+            <button :disabled="locked" @click="state.tab = 'evidence'">
+              调整范围
+            </button>
+          </header>
+          <div class="ai-scope-summary-list">
+            <span v-for="item in selectedScopes" :key="item.key" class="scope-chip">
+              <span>{{ item.label }}</span><button :disabled="locked" :aria-label="`移除 ${item.label}`" @click="setScopes(session.scopes.filter(scope => scopeIdentity(scope) !== item.key))">×</button>
+            </span>
+          </div>
+        </section>
         <div v-if="!session.answers.length" class="ai-welcome">
           <button class="ai-welcome-link" @click="state.tab = 'evidence'">
             选择相关字段或区域，从一个具体问题开始。
@@ -336,13 +359,13 @@ function statusText(answer: AiAnswer) {
           {{ issue }}
         </DismissibleNotice>
         <div class="ai-send-summary">
-          <strong>{{ preview?.evidence.length || 0 }} 项证据 · {{ (byteCount / 1000).toFixed(1) }} / 150 KB</strong>
+          <strong>{{ preview?.evidence.length || 0 }} 项证据 · {{ (byteCount / 1000).toFixed(1) }} / {{ requestLimitKb }} KB</strong>
           <p>{{ valueSummary }}</p>
           <p class="muted">
             自动补充 {{ session.evidence.filter(item => item.automatic && item.included).length }} 项关联证据。默认脱敏，凭据始终移除。
           </p>
-          <DismissibleNotice v-if="byteCount > REQUEST_LIMIT" :notice-key="`${session.id}:${byteCount}`" class="warnings">
-            请求超过上限，请缩小范围。占用最多的证据：
+          <DismissibleNotice v-if="byteCount > state.settings.maxRequestBytes" :notice-key="`${session.id}:${byteCount}:${state.settings.maxRequestBytes}`" class="warnings">
+            请求超过 {{ requestLimitKb }} KB，请缩小范围。占用最多的证据：
             <span v-for="item in largestEvidence" :key="item.id">{{ item.title }}（{{ (item.size / 1000).toFixed(1) }} KB） </span>
           </DismissibleNotice>
           <div class="tool-actions">
@@ -411,6 +434,9 @@ function statusText(answer: AiAnswer) {
             <section class="ai-advanced-settings">
               <h4>高级设置</h4><label>回答输出上限<input v-model.number="state.settings.maxTokens" :disabled="workspace.busy" type="number" min="128" max="65536" step="128"></label><p class="muted">
                 默认 4096；达到上限后可手动继续生成。实际支持范围取决于模型。
+              </p>
+              <label>请求体上限（KB）<input v-model.number="requestLimitKb" :disabled="workspace.busy" type="number" min="32" max="2000" step="1"></label><p class="muted">
+                默认 150 KB；范围 32–2000 KB，仅限制发送的请求 JSON 大小。
               </p>
             </section>
             <div class="ai-settings-actions">

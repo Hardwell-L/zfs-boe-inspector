@@ -229,6 +229,12 @@ h1, h2, h3, p { margin-top: 0; }
 .ai-welcome { max-width: 720px; margin: 24px auto; color: #697287; text-align: center; }
 .ai-welcome-link { border: 0; margin-bottom: 12px; padding: 6px; color: #6254e7; background: transparent; font-size: 14px; line-height: 1.7; }
 .ai-welcome-link:hover { text-decoration: underline; }
+.ai-scope-summary { max-width: 720px; margin: 0 auto 18px; padding: 12px 14px; border: 1px solid #e1e3ed; border-radius: 8px; background: #fafaff; }
+.ai-scope-summary > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: #4b5366; }
+.ai-scope-summary > header button { padding: 2px 0; border: 0; color: #5144d4; }
+.ai-scope-summary-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-scope-summary .scope-chip { max-width: 100%; }
+.ai-scope-summary .scope-chip > span { min-width: 0; overflow-wrap: anywhere; }
 .ai-rename-input { width: 160px; align-self: center; }
 .dismissible-notice { display: flex; align-items: flex-start; gap: 8px; margin-block: 6px; }
 .dismissible-notice .notice-content { flex: 1; min-width: 0; overflow-wrap: anywhere; }

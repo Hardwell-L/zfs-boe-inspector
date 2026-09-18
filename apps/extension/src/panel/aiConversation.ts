@@ -1,7 +1,6 @@
 import type { AiEvidence } from './aiContext';
 import type { ChatMessage } from './aiClient';
 
-export const REQUEST_LIMIT = 150_000;
 export function bytes(value: unknown): number {
   return new window.TextEncoder().encode(typeof value === 'string' ? value : JSON.stringify(value)).length;
 }
