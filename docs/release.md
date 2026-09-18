@@ -50,30 +50,11 @@ pnpm pack:extension
 
 ## 正式发布
 
-### 完整发布
+### 发布 npm
 
-更新所有 package、Extension manifest 和 `CHANGELOG.md` 的版本，提交并推送 `main` 后创建同版本 Tag：
+更新根 package、`packages/*/package.json`、Adapter 默认上报版本、lockfile 和 `CHANGELOG.md`，完成本地校验后提交并推送 `main`。在 GitHub Actions 中手动运行 `npm Release` workflow，输入与根 `package.json` 一致的 SemVer 版本号。
 
-```bash
-git tag v0.1.0
-git push origin main
-git push origin v0.1.0
-```
-
-Tag 会触发 Release workflow。流水线先执行完整质量校验，再按依赖顺序使用 Trusted Publishing 发布两个 npm package，最后创建 GitHub Release 并上传 Extension ZIP。相同 npm 版本已存在时会自动跳过，支持失败后重跑。
-
-### 仅发布 npm
-
-更新根 package、`packages/*/package.json`、Adapter 默认上报版本、lockfile 和 `CHANGELOG.md`，保持 Extension 版本不变。检查并提交推送后，使用独立 npm Tag：
-
-```bash
-pnpm release:check npm-v0.2.3
-pnpm pack:npm
-git tag npm-v0.2.3
-git push origin npm-v0.2.3
-```
-
-`npm-v*` Tag 使用同一个 `release.yml` 和 Trusted Publisher 配置，执行完整质量校验，按依赖顺序发布两个 npm 包，并将 tarball 上传到 GitHub Release。不会打包或发布 Extension。`v*` 完整发布仍要求 npm 与 Extension 版本一致。
+workflow 会执行完整质量校验，按依赖顺序使用 Trusted Publishing 发布两个 npm package。相同版本已存在时会自动跳过，支持失败后重跑。npm 发布不创建 Git Tag，也不创建 GitHub Release。
 
 ### 仅发布 Extension
 
@@ -85,7 +66,9 @@ git push origin main
 git push origin extension-v0.2.3
 ```
 
-`extension-v*` Tag 会触发独立 Extension Release workflow。流水线执行质量校验、构建 Extension、生成 ZIP 和 SHA-256，并创建 GitHub Release；不会执行 `publish:npm`，也不会更新 npm package。
+`extension-v*` Tag 会触发独立 Extension Release workflow。Tag 必须使用小写 `extension-v` 前缀，版本号遵循 [Semantic Versioning](https://semver.org/)，并与 Extension package/manifest 版本一致。流水线执行质量校验、构建 Extension、生成 ZIP 和 SHA-256，并创建 GitHub Release；不会执行 `publish:npm`，也不会更新 npm package。
+
+当前项目只为 Extension 创建 Git Tag，唯一支持的格式是 `extension-v<SemVer>`。历史 `v*`、`npm-v*` 或大写 Tag 仅作为历史记录，后续发布不再使用。
 
 ## 安装 Extension
 

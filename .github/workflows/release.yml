@@ -1,13 +1,15 @@
-name: Release
+name: npm Release
 
 on:
-  push:
-    tags:
-      - 'v*'
-      - 'npm-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'npm package version (SemVer)'
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 jobs:
@@ -26,6 +28,10 @@ jobs:
           package-manager-cache: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm release:check
+      - name: 校验 npm 发布版本
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: test "$(node -p "require('./package.json').version")" = "$RELEASE_VERSION"
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm typecheck
@@ -33,24 +39,3 @@ jobs:
       - run: pnpm pack:npm
       - name: 使用 Trusted Publishing 发布 npm 包
         run: pnpm publish:npm
-      - run: pnpm pack:extension
-        if: ${{ !startsWith(github.ref_name, 'npm-v') }}
-      - name: 创建 GitHub Release
-        if: ${{ !startsWith(github.ref_name, 'npm-v') }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          release/*.zip
-          release/*.sha256
-          --generate-notes
-          --title "ZFS BOE Inspector $GITHUB_REF_NAME"
-      - name: 创建 npm GitHub Release
-        if: ${{ startsWith(github.ref_name, 'npm-v') }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          release/npm/*.tgz
-          --generate-notes
-          --title "ZFS BOE Inspector $GITHUB_REF_NAME"

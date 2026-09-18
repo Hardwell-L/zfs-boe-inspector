@@ -91,37 +91,31 @@ shasum -a 256 -c zfs-boe-inspector-extension-v0.2.3.zip.sha256
 cd ..
 ```
 
-### 完整发布 npm 与 Extension
+### 发布 npm
 
-先将根 `package.json`、所有 workspace `package.json`、Extension manifest 和 `CHANGELOG.md` 更新为同一版本，然后执行：
+更新根 `package.json`、`packages/*/package.json`、lockfile 和 `CHANGELOG.md`，然后执行：
 
 ```bash
 RELEASE_VERSION=0.2.4
 
-pnpm release:check "v${RELEASE_VERSION}"
+pnpm release:check
 pnpm lint
 pnpm test
 pnpm typecheck
 pnpm build
 pnpm pack:npm
-pnpm pack:extension
 
 git add package.json \
   packages/shared-types/package.json \
   packages/adapter-vue3/package.json \
   packages/core/package.json \
   packages/rule-base/package.json \
-  apps/extension/package.json \
-  apps/extension/public/manifest.json \
   CHANGELOG.md
-git commit -m "chore(release): 发布 ${RELEASE_VERSION}"
+git commit -m "chore(npm): 发布 npm ${RELEASE_VERSION}"
 git push origin main
-
-git tag "v${RELEASE_VERSION}"
-git push origin "v${RELEASE_VERSION}"
 ```
 
-`v*` Tag 会触发 GitHub Release workflow，按顺序发布 `shared-types`、`adapter-vue3`，并上传 Extension ZIP 和 SHA-256。正常情况下不需要在本地执行 `npm publish`。
+推送后在 GitHub Actions 中手动运行 `npm Release` workflow，输入 `${RELEASE_VERSION}`。npm 发布不创建 Git Tag 或 GitHub Release。
 
 ### 仅发布 Extension
 
@@ -145,7 +139,7 @@ git tag "extension-v${EXTENSION_VERSION}"
 git push origin "extension-v${EXTENSION_VERSION}"
 ```
 
-`extension-v*` Tag 只构建并上传 Extension ZIP 和 SHA-256，不执行 `publish:npm`。Tag 必须使用小写。
+`extension-v*` Tag 只构建并上传 Extension ZIP 和 SHA-256，不执行 `publish:npm`。当前项目仅为 Extension 打 Tag，格式必须是小写 `extension-v<SemVer>`，版本规则参考 [Semantic Versioning](https://semver.org/)。
 
 ### 手动发布 npm 兜底
 
@@ -158,7 +152,7 @@ npm publish "release/npm/zfs-boe-inspector-shared-types-${RELEASE_VERSION}.tgz" 
 npm publish "release/npm/zfs-boe-inspector-adapter-vue3-${RELEASE_VERSION}.tgz" --access public
 ```
 
-必须先发布 `shared-types`，再发布 `adapter-vue3`。禁止直接在 workspace package 目录执行 `npm publish`，避免把 `workspace:` 依赖写入 npm registry。Trusted Publisher 和完整发布约定见[发布流程](docs/release.md)。
+必须先发布 `shared-types`，再发布 `adapter-vue3`。禁止直接在 workspace package 目录执行 `npm publish`，避免把 `workspace:` 依赖写入 npm registry。Trusted Publisher 和发布约定见[发布流程](docs/release.md)。
 
 ## BOE 项目接入
 
