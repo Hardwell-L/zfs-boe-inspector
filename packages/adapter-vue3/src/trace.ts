@@ -1,4 +1,14 @@
-import type { BoeInspectionSnapshot, JsonValue, TraceCursor, TraceUpdate, TraceEvent, TraceSession } from '@zfs-boe-inspector/shared-types';
+import type {
+  BoeInspectionSnapshot,
+  JsonValue,
+  TraceConditionDefinition,
+  TraceConditionRef,
+  TraceCursor,
+  TraceEvent,
+  TraceSession,
+  TraceStopDetail,
+  TraceUpdate,
+} from '@zfs-boe-inspector/shared-types';
 import { toSerializable } from './serialize';
 import { traceTriggers } from './traceContext';
 
@@ -19,7 +29,25 @@ const METHODS: Record<string, string> = {
 export interface TraceTarget {
   component: object;
   getInstanceId(): string;
+  getTraceConditions?: TraceConditionResolver;
 }
+
+export interface TraceConditionCapture {
+  definition: TraceConditionDefinition;
+  result: TraceConditionRef['result'];
+}
+
+export type TraceConditionResolver = (context: {
+  eventId: string;
+  method: string;
+  args: readonly unknown[];
+  component: object;
+  instanceId: string;
+}) => TraceConditionCapture[] | undefined;
+
+const MAX_TRACE_DEPTH = 32;
+const MAX_EVENTS_PER_SECOND = 300;
+const MAX_CONDITION_RESOLVER_MS = 20;
 
 // 这里只观察现有调用。Promise 不追加处理器，避免改变宿主 unhandledrejection 行为。
 export class TraceRecorder {
@@ -30,6 +58,11 @@ export class TraceRecorder {
   private counter = 0;
   private sessionSequence = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private conditionDefinitions = new Map<string, TraceConditionDefinition>();
+  private resolverDisabled = false;
+  private resolvingConditions = false;
+  private eventTimes: number[] = [];
+  private suppressedEvents = 0;
 
   constructor(private readonly snapshot: (instanceId: string) => BoeInspectionSnapshot) {}
 
@@ -45,6 +78,7 @@ export class TraceRecorder {
     this.session = {
       id: `trace-${Date.now()}-${++this.sessionSequence}`, instanceId, active: true, startedAt: new Date().toISOString(),
       events: [], coverage, startSnapshot,
+      conditionDefinitions: [],
       limitations: [
         '只观察实际存在的组件方法入口，不保证覆盖内部表达式、被捕获的异常或服务端过程。',
         '异步返回仅记录为 pending；后续字段更新独立记录，无法确认的异步因果不连接。',
@@ -54,6 +88,11 @@ export class TraceRecorder {
     };
     this.counter = 0;
     this.size = startBytes;
+    this.conditionDefinitions.clear();
+    this.resolverDisabled = false;
+    this.resolvingConditions = false;
+    this.eventTimes = [];
+    this.suppressedEvents = 0;
     for (const target of selected) {
       for (const method of Object.keys(METHODS)) this.wrap(target, method);
     }
@@ -62,8 +101,8 @@ export class TraceRecorder {
     window.addEventListener('pagehide', this.onPageHide);
     this.timer = setInterval(() => {
       try {
-        if (selected.some((target) => target.getInstanceId() !== instanceId)) this.stop('单据已切换');
-      } catch { this.stop('单据实例不可读取'); }
+        if (selected.some((target) => target.getInstanceId() !== instanceId)) this.stop('单据已切换', { code: 'instance-changed' });
+      } catch { this.stop('单据实例不可读取', { code: 'instance-changed' }); }
     }, 500);
     return this.get()!;
   }
@@ -78,18 +117,24 @@ export class TraceRecorder {
     const reset = cursor?.sessionId !== session.id || !Number.isInteger(cursor?.offset)
       || cursor!.offset < 0 || cursor!.offset > session.events.length;
     const offset = reset ? 0 : cursor!.offset;
-    const { events, startSnapshot, endSnapshot, ...meta } = session;
-    return { ...meta, reset, eventOffset: offset, events: events.slice(offset),
+    const { events, startSnapshot, endSnapshot, conditionDefinitions, ...meta } = session;
+    const newEvents = events.slice(offset);
+    const keys = new Set(newEvents.flatMap((event) => (event.conditions ?? []).map((condition) => condition.key)));
+    const definitions = reset ? conditionDefinitions : conditionDefinitions?.filter((definition) => keys.has(definition.key));
+    return { ...meta, reset, eventOffset: offset, events: newEvents,
       ...(reset ? { startSnapshot } : {}),
+      ...(definitions?.length ? { conditionDefinitions: definitions } : {}),
       ...(endSnapshot && (reset || !cursor?.ended) ? { endSnapshot } : {}) };
   }
 
-  stop(reason = '用户停止记录'): TraceSession | undefined {
+  stop(reason = '用户停止记录', stopDetail?: TraceStopDetail): TraceSession | undefined {
     const session = this.session;
     if (!session?.active) return session;
     session.active = false;
     session.stoppedAt = new Date().toISOString();
     session.reason = reason;
+    if (stopDetail || reason === '用户停止记录') session.stopDetail = stopDetail ?? { code: 'user' };
+    if (this.suppressedEvents > 0) session.suppressedEvents = this.suppressedEvents;
     for (const restore of this.restores.splice(0)) {
       try { restore(); } catch { /* 宿主已销毁时不影响其清理。 */ }
     }
@@ -122,14 +167,32 @@ export class TraceRecorder {
   private add(event: TraceEvent) {
     const session = this.session;
     if (!session?.active) return;
+    const now = Date.now();
+    this.eventTimes.push(now);
+    while (this.eventTimes.length && this.eventTimes[0]! <= now - 1000) this.eventTimes.shift();
+    if (this.eventTimes.length > MAX_EVENTS_PER_SECOND) {
+      this.suppressedEvents += 1;
+      this.stop('事件速率超过采集上限，已停止记录', {
+        code: 'event-storm', threshold: MAX_EVENTS_PER_SECOND, observed: this.eventTimes.length, method: event.method, eventId: event.id,
+      });
+      return;
+    }
     const bytes = new TextEncoder().encode(JSON.stringify(event)).length;
     if (session.events.length >= 1000 || this.size + bytes > 5 * 1024 * 1024) {
-      this.stop('已达到 1,000 条事件或 5 MB 上限');
+      this.suppressedEvents += 1;
+      this.stop('已达到 1,000 条事件或 5 MB 上限', {
+        code: session.events.length >= 1000 ? 'event-limit' : 'size-limit',
+        threshold: session.events.length >= 1000 ? 1000 : 5 * 1024 * 1024,
+        observed: session.events.length >= 1000 ? session.events.length : this.size + bytes,
+        method: event.method, eventId: event.id,
+      });
       return;
     }
     session.events.push(event);
     this.size += bytes;
-    if (session.events.length >= 1000) this.stop('已达到 1,000 条事件上限');
+    if (session.events.length >= 1000) this.stop('已达到 1,000 条事件上限', {
+      code: 'event-limit', threshold: 1000, observed: session.events.length, method: event.method, eventId: event.id,
+    });
   }
 
   private wrap(target: TraceTarget, method: string) {
@@ -140,11 +203,22 @@ export class TraceRecorder {
     const session = this.session;
     const observe = (receiver: unknown, args: unknown[]) => {
       if (!session?.active || this.session !== session) return Reflect.apply(original, receiver, args);
+      if (this.resolvingConditions) {
+        this.suppressedEvents += 1;
+        return Reflect.apply(original, receiver, args);
+      }
+      if (this.stack.length >= MAX_TRACE_DEPTH) {
+        this.suppressedEvents += 1;
+        this.stop('同步调用深度超过采集上限，已停止记录', {
+          code: 'recursion-depth', threshold: MAX_TRACE_DEPTH, observed: this.stack.length + 1, method, eventId: `event-${this.counter + 1}`,
+        });
+        return Reflect.apply(original, receiver, args);
+      }
       let currentId: string;
       try { currentId = target.getInstanceId(); }
       catch { return Reflect.apply(original, receiver, args); }
       if (currentId !== session.instanceId) {
-        try { this.stop('单据已切换'); } catch { /* 清理失败不影响原方法。 */ }
+        try { this.stop('单据已切换', { code: 'instance-changed' }); } catch { /* 清理失败不影响原方法。 */ }
         return Reflect.apply(original, receiver, args);
       }
       const event: TraceEvent = {
@@ -179,6 +253,7 @@ export class TraceRecorder {
           event.fieldCode = trigger.fieldCode;
           if (trigger.rowIndex !== undefined) event.rowIndex = trigger.rowIndex;
         }
+        this.captureConditions(target, event, method, args, currentId);
       } catch { /* 无法读取作用域时仍保留方法入口。 */ }
       const readRow = () => component.data?.[event.areaCode ?? '']?.[event.rowIndex ?? 0];
       try { event.before = this.safe(readRow()); } catch { /* 采集不阻断业务。 */ }
@@ -213,6 +288,42 @@ export class TraceRecorder {
       const capability = this.session?.coverage.find((item) => item.method === method);
       if (capability) capability.supported = false;
       this.session?.limitations.push(`${method} 无法安装观察器。`);
+    }
+  }
+
+  private captureConditions(target: TraceTarget, event: TraceEvent, method: string, args: unknown[], instanceId: string) {
+    if (!target.getTraceConditions || this.resolverDisabled) return;
+    const startedAt = Date.now();
+    this.resolvingConditions = true;
+    try {
+      const captures = target.getTraceConditions({ eventId: event.id, method, args, component: target.component, instanceId });
+      if (!Array.isArray(captures)) return;
+      const refs: TraceConditionRef[] = [];
+      for (const capture of captures) {
+        const definition = capture?.definition;
+        if (!definition || typeof definition.key !== 'string' || !definition.key.trim()) continue;
+        const key = definition.key.trim();
+        if (!this.conditionDefinitions.has(key)) {
+          this.conditionDefinitions.set(key, {
+            key,
+            ...(typeof definition.ruleId === 'string' ? { ruleId: definition.ruleId } : {}),
+            ...(typeof definition.label === 'string' ? { label: definition.label } : {}),
+            ...(definition.expression !== undefined ? { expression: this.safe(definition.expression) } : {}),
+          });
+          if (this.session) this.session.conditionDefinitions = [...this.conditionDefinitions.values()];
+        }
+        const result = capture.result === 'matched' || capture.result === 'not-matched' ? capture.result : 'unknown';
+        refs.push({ key, result });
+      }
+      if (refs.length) event.conditions = refs;
+    } catch {
+      // 条件解析失败不影响业务方法和基础事件采集。
+    } finally {
+      this.resolvingConditions = false;
+      if (Date.now() - startedAt > MAX_CONDITION_RESOLVER_MS) {
+        this.resolverDisabled = true;
+        this.session?.limitations.push(`条件解析超过 ${MAX_CONDITION_RESOLVER_MS} ms，已禁用本次记录的后续条件解析。`);
+      }
     }
   }
 

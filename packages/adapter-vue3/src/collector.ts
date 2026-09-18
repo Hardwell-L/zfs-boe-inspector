@@ -9,6 +9,7 @@ import {
   type TravelInspectionData,
 } from '@zfs-boe-inspector/shared-types';
 import { toSerializable } from './serialize';
+import type { TraceConditionResolver } from './trace';
 
 export interface AdapterOptions {
   projectCode: string;
@@ -32,6 +33,7 @@ export interface RuntimeCollector {
   getInstanceId(): string;
   getBoeTypeCode?(): string | undefined;
   collect(): CollectorContribution;
+  getTraceConditions?: TraceConditionResolver;
 }
 
 export interface BillTemplateComponentLike {
@@ -63,6 +65,7 @@ export interface BillTemplateCollectorOptions {
   getApplySnapshot?: (
     component: BillTemplateComponentLike,
   ) => ApplyBoeEvidenceSnapshot | undefined;
+  getTraceConditions?: TraceConditionResolver;
 }
 
 export interface TravelComponentLike extends BillTemplateComponentLike {
@@ -217,6 +220,7 @@ export function createBillTemplateCollector(
     source: 'bill-template',
     getInstanceId: () => options.getInstanceId?.() ?? deriveInstanceId(component),
     getBoeTypeCode: () => getMeta(component).boeTypeCode,
+    ...(options.getTraceConditions ? { getTraceConditions: options.getTraceConditions } : {}),
     collect: () => {
       const warnings: string[] = [];
       let formattedBoeDto: JsonValue | undefined;

@@ -265,13 +265,19 @@ export function buildAiEvidence(
     if (snapshot.applyBoe) add('关联申请快照', 'applyBoe', snapshot.applyBoe, 'selected', 'value');
   }
   if (trace?.instanceId === snapshot.instanceId) {
-    add('追踪覆盖与缺口', 'trace.coverage', { coverage: trace.coverage, limitations: trace.limitations, startedAt: trace.startedAt, stoppedAt: trace.stoppedAt }, 'trace', 'trace');
+    add('追踪覆盖与缺口', 'trace.coverage', {
+      coverage: trace.coverage, limitations: trace.limitations, startedAt: trace.startedAt, stoppedAt: trace.stoppedAt,
+      ...(trace.conditionDefinitions?.length ? { conditionDefinitions: trace.conditionDefinitions } : {}),
+      ...(trace.stopDetail ? { stopDetail: trace.stopDetail } : {}),
+      ...(trace.suppressedEvents ? { suppressedEvents: trace.suppressedEvents } : {}),
+    }, 'trace', 'trace');
     for (const event of trace.events) {
       if (!match(event.areaCode ?? '', event.fieldCode, event.rowIndex) && !event.triggers?.some((trigger) => match(trigger.areaCode, trigger.fieldCode, trigger.rowIndex))) continue;
       const scopedEvent = all ? event : {
         id: event.id, parentId: event.parentId, at: event.at, method: event.method,
         category: event.category, status: event.status, error: event.error,
         areaCode: event.areaCode, fieldCode: event.fieldCode, rowIndex: event.rowIndex,
+        conditions: event.conditions,
         triggers: event.triggers?.filter((trigger) => match(trigger.areaCode, trigger.fieldCode, trigger.rowIndex)),
         before: Object.fromEntries(Object.entries(object(event.before)).filter(([field]) => match(event.areaCode ?? '', field, event.rowIndex))),
         after: Object.fromEntries(Object.entries(object(event.after)).filter(([field]) => match(event.areaCode ?? '', field, event.rowIndex))),

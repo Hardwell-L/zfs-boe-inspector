@@ -214,6 +214,33 @@ export interface TraceTrigger {
   reason?: 'legacy-adapter' | 'data-unavailable' | 'invalid-row' | 'row-missing' | 'field-missing' | 'read-error';
 }
 
+export interface TraceConditionDefinition {
+  key: string;
+  ruleId?: string;
+  label?: string;
+  expression?: JsonValue;
+}
+
+export interface TraceConditionRef {
+  key: string;
+  result: 'matched' | 'not-matched' | 'unknown';
+}
+
+export interface TraceStopDetail {
+  code:
+    | 'user'
+    | 'event-limit'
+    | 'size-limit'
+    | 'recursion-depth'
+    | 'event-storm'
+    | 'resolver-slow'
+    | 'instance-changed';
+  threshold?: number;
+  observed?: number;
+  method?: string;
+  eventId?: string;
+}
+
 export interface TraceEvent {
   id: string;
   parentId?: string;
@@ -231,6 +258,7 @@ export interface TraceEvent {
   rowIndex?: number;
   triggers?: TraceTrigger[];
   triggersOmitted?: number;
+  conditions?: TraceConditionRef[];
 }
 
 export interface TraceSession {
@@ -245,6 +273,9 @@ export interface TraceSession {
   limitations: string[];
   startSnapshot: BoeInspectionSnapshot;
   endSnapshot?: BoeInspectionSnapshot;
+  conditionDefinitions?: TraceConditionDefinition[];
+  stopDetail?: TraceStopDetail;
+  suppressedEvents?: number;
 }
 
 /** 按已接收事件数量读取；事件结束顺序可能与 id 顺序不同。 */
@@ -254,10 +285,11 @@ export interface TraceCursor {
   ended?: boolean;
 }
 
-export interface TraceUpdate extends Omit<TraceSession, 'startSnapshot'> {
+export interface TraceUpdate extends Omit<TraceSession, 'startSnapshot' | 'conditionDefinitions'> {
   reset: boolean;
   eventOffset: number;
   startSnapshot?: BoeInspectionSnapshot;
+  conditionDefinitions?: TraceConditionDefinition[];
 }
 
 export interface ModelInspectionContext {

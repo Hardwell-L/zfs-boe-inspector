@@ -101,4 +101,42 @@ describe('增量记录与缺失原因', () => {
     expect(traceTriggers('updateBoeData', [{ areaCode: 'detail', rowIndex: 0, value: values }], {}).length).toBe(30);
     expect(reads).toBe(0);
   });
+
+  it('条件定义按会话去重，事件只保留引用，并能增量读取新定义', () => {
+    const component = { data: {}, triggerComputeMixin() {} };
+    const recorder = new TraceRecorder(() => snapshot);
+    recorder.start('bill', [{
+      component,
+      getInstanceId: () => 'bill',
+      getTraceConditions: ({ method }) => [{
+        definition: { key: 'rule-1', ruleId: 'R1', label: '金额条件', expression: { code: 'amount > 0' } },
+        result: method === 'triggerComputeMixin' ? 'matched' : 'unknown',
+      }],
+    }]);
+    component.triggerComputeMixin();
+    component.triggerComputeMixin();
+    const session = recorder.get()!;
+    expect(session.conditionDefinitions).toEqual([{ key: 'rule-1', ruleId: 'R1', label: '金额条件', expression: { code: 'amount > 0' } }]);
+    expect(session.events.every((event) => event.conditions?.[0]?.key === 'rule-1')).toBe(true);
+    expect(recorder.getUpdate({ sessionId: session.id, offset: 1 })?.conditionDefinitions).toEqual([{ key: 'rule-1', ruleId: 'R1', label: '金额条件', expression: { code: 'amount > 0' } }]);
+    recorder.stop();
+  });
+
+  it('同步递归达到深度上限时停止采集但不改变业务返回值', () => {
+    const component = { data: {}, triggerComputeMixin(depth: number): number { return depth > 0 ? component.triggerComputeMixin(depth - 1) : 7; } };
+    const recorder = new TraceRecorder(() => snapshot);
+    recorder.start('bill', [{ component, getInstanceId: () => 'bill' }]);
+    expect(component.triggerComputeMixin(40)).toBe(7);
+    expect(recorder.get()?.stopDetail).toMatchObject({ code: 'recursion-depth', threshold: 32 });
+    expect(recorder.get()?.active).toBe(false);
+  });
+
+  it('短时间事件风暴停止采集并保留事件上限内的记录', () => {
+    const component = { data: {}, triggerComputeMixin() {} };
+    const recorder = new TraceRecorder(() => snapshot);
+    recorder.start('bill', [{ component, getInstanceId: () => 'bill' }]);
+    for (let index = 0; index < 301; index += 1) component.triggerComputeMixin();
+    expect(recorder.get()?.stopDetail).toMatchObject({ code: 'event-storm', threshold: 300 });
+    expect(recorder.get()?.events.length).toBe(300);
+  });
 });

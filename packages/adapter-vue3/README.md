@@ -32,6 +32,8 @@ export default {
 
 两种方式都支持可选的 `projectCode` 等元数据覆盖，并自动管理注册和注销生命周期。关联申请三段对比可选传入 `getApplySnapshot(component)`；未传入时仍保留模板映射和当前值诊断，回调异常只生成采集 warning。
 
+需要提供过程记录业务条件时，可传入只读同步 `getTraceConditions({ eventId, method, args, component, instanceId })`，返回带 `definition.key`、可选 `ruleId`/`label`/`expression` 和 `result` 的条件数组。第一个条件作为主分组条件；不要在回调中调用被观察方法或执行异步操作。回调异常、重入或超过约 20 ms 会自动降级，不影响 BOE 原方法。
+
 ## 差旅组件自动发现
 
 通用 Mixin 或 Composable 会从 `billTemplate` 向上定位标准差旅宿主，自动注册 Travel Collector。标准项目不需要逐个修改差旅 wrapper。

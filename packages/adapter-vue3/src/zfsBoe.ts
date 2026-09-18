@@ -14,6 +14,7 @@ import {
   type TravelCollectorOptions,
   type TravelComponentLike,
 } from './collector';
+import type { TraceConditionResolver } from './trace';
 import {
   attachBillTemplateInspector,
   attachTravelInspector,
@@ -27,6 +28,7 @@ declare const process: { env?: { NODE_ENV?: string } } | undefined;
 export type ZfsBoeInspectorOptions = Partial<AdapterOptions>
   & Pick<BillTemplateCollectorOptions, 'getApplySnapshot'>
   & {
+    getTraceConditions?: TraceConditionResolver;
     autoTravelCollector?: boolean;
     resolveTravelComponent?: (
       component: BillTemplateComponentLike,
@@ -61,7 +63,7 @@ function resolvedOptions(
   const resolved: AdapterOptions = {
     projectCode: options.projectCode ?? inferredProjectCode(),
     environment: options.environment ?? inferredEnvironment(),
-    adapterVersion: options.adapterVersion ?? '0.2.6',
+    adapterVersion: options.adapterVersion ?? '0.2.8',
     zfsPackages: {
       '@zfs/boe': boePackage.version,
       '@zfs/ui-plus': boePackage.dependencies?.['@zfs/ui-plus'] ?? 'unknown',
@@ -85,6 +87,7 @@ function registerBillTemplate(
     fieldConfig,
     getDynamicConfig,
     ...(options.getApplySnapshot ? { getApplySnapshot: options.getApplySnapshot } : {}),
+    ...(options.getTraceConditions ? { getTraceConditions: options.getTraceConditions } : {}),
   });
   registrations.set(component, dispose);
 

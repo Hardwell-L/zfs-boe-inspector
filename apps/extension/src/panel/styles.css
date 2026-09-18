@@ -388,12 +388,11 @@ h1, h2, h3, p { margin-top: 0; }
 .version-list .data-table { min-width: 0; }
 .trace-event-card { border: 1px solid #dfe2ea; border-radius: 8px; background: #fff; overflow: hidden; }
 .trace-event-card > summary { cursor: pointer; padding: 12px 14px; }
-.trace-event-heading { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.trace-status { padding: 2px 7px; border-radius: 4px; background: #eef1f8; font-size: 12px; }
-.trace-error { color: #ad2929; background: #ffecec; }
-.trace-event-method { display: block; color: #667086; font-size: 12px; margin: 6px 0; }
-.trace-trigger-preview { display: block; margin-top: 7px; overflow-wrap: anywhere; }
+.trace-area-group > summary::marker, .trace-condition-group > summary::marker, .trace-event-card > summary::marker { font-size: 10px; }
+.trace-event-summary-content { display: inline-block; max-width: calc(100% - 1.5em); vertical-align: top; }
+.trace-trigger-preview { display: block; overflow-wrap: anywhere; }
 .trace-trigger-preview > span { display: block; margin-top: 3px; }
+.trace-repeat-count { display: inline-block; margin-top: 7px; padding: 2px 7px; border-radius: 4px; color: #52617b; background: #eef1f8; font-size: 12px; }
 .trace-event-body { padding: 0 14px 14px; }
 .trace-event-body .data-table td { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 350px; }
 .trace-event-body > button { margin-top: 12px; }
@@ -412,3 +411,13 @@ h1, h2, h3, p { margin-top: 0; }
 .issues-panel .info .issue-title > span { color: #27559e; background: #e8f0ff; }
 .list-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 14px 0; }
 .trace-value-reason { color: #835000; }
+.trace-condition-group, .trace-area-group { border: 1px solid #dfe2ea; border-radius: 8px; background: #f8f9fc; margin: 10px 0; overflow: hidden; }
+.trace-condition-group > summary, .trace-area-group > summary { cursor: pointer; padding: 11px 14px; }
+.trace-area-group > summary { background: #eef1f8; }
+.trace-condition-group { margin: 8px; background: #fff; }
+.trace-condition-group .trace-event-card { margin: 0 8px 8px; }
+.trace-condition-pagination { margin: 12px 8px 8px; }
+.trace-area-summary, .trace-condition-summary { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.trace-area-label { color: #52617b; }
+.trace-group-count { color: #26364e; font-weight: 600; }
+.trace-group-time { color: #667086; }

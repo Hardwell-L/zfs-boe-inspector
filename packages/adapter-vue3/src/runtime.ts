@@ -55,14 +55,18 @@ export class BoeInspectorRuntime {
   constructor(options: AdapterOptions) {
     this.options = {
       ...options,
-      adapterVersion: options.adapterVersion ?? '0.2.6',
+      adapterVersion: options.adapterVersion ?? '0.2.8',
     };
   }
 
   register(collector: RuntimeCollector, component?: object): () => void {
     const token = Symbol(collector.source);
     this.registrations.push({ token, collector, order: this.sequence += 1,
-      ...(component ? { target: { component, getInstanceId: () => collector.getInstanceId() } } : {}),
+      ...(component ? { target: {
+        component,
+        getInstanceId: () => collector.getInstanceId(),
+        ...(collector.getTraceConditions ? { getTraceConditions: collector.getTraceConditions } : {}),
+      } } : {}),
     });
     return () => {
       const index = this.registrations.findIndex((registration) => registration.token === token);

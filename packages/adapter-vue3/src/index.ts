@@ -14,6 +14,7 @@ export * from './collector';
 export * from './fieldInspector';
 export * from './runtime';
 export * from './serialize';
+export type { TraceConditionCapture, TraceConditionResolver, TraceTarget } from './trace';
 
 declare global {
   interface Window {

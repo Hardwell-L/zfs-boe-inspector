@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BoeInspectionSnapshot, RuleEvaluation, TraceEvent, TraceSession } from '@zfs-boe-inspector/shared-types';
 import { fieldAreas, indexedFieldDetail, issueItems, validationRows } from '../../../apps/extension/src/panel/inspectionView';
-import { traceEventView, TraceViewCache, traceChanges, mergeTraceUpdate, traceCursor } from '../../../apps/extension/src/panel/traceView';
+import { traceEventView, traceGroups, TraceViewCache, traceChanges, mergeTraceUpdate, traceCursor } from '../../../apps/extension/src/panel/traceView';
 import { buildAiEvidence, scopeIdentity, scopeLabel } from '../../../apps/extension/src/panel/aiContext';
 
 const snapshot: BoeInspectionSnapshot = {
@@ -83,6 +83,7 @@ describe('记录展示缓存与增量合并', () => {
     const cache = new TraceViewCache();
     const first = cache.read({ ...session, events: [entry] });
     const next = cache.read({ ...session, events: [entry, { ...event, id: 'event-2' }] });
+    expect(next).not.toBe(first);
     expect(next[0]).toBe(first[0]);
     next.filter((item) => item.search.includes('计算'));
     expect(beforeReads).toBe(0);
@@ -93,15 +94,47 @@ describe('记录展示缓存与增量合并', () => {
   });
 
   it('增量合并不重复事件和开始快照，保留停止时证据，拒绝错位游标', () => {
-    const update = { ...session, reset: false, eventOffset: 1, events: [{ ...event, id: 'event-2' }] };
+    const update = { ...session, reset: false, eventOffset: 1, events: [{ ...event, id: 'event-2' }], conditionDefinitions: [{ key: 'rule-1', label: '条件一' }] };
     const next = mergeTraceUpdate(session, update)!;
     expect(next.events.map((item) => item.id)).toEqual(['event-1', 'event-2']);
     expect(next.startSnapshot).toBe(snapshot);
+    expect(next.conditionDefinitions).toEqual([{ key: 'rule-1', label: '条件一' }]);
     expect(traceCursor(next)).toEqual({ sessionId: 'trace-1', offset: 2, ended: false });
     expect(() => mergeTraceUpdate(next, update)).toThrow('游标');
     const stopped = mergeTraceUpdate(next, { ...update, eventOffset: 2, events: [], active: false, endSnapshot: snapshot })!;
     expect(stopped.endSnapshot).toBe(snapshot);
     expect(stopped.events).toBe(next.events);
     expect(mergeTraceUpdate(stopped, undefined)).toBeUndefined();
+  });
+
+  it('先按单据区域再按主条件建立轻量分组，旧事件回退到方法类别', () => {
+    const first = traceEventView({ ...event, conditions: [{ key: 'rule-1', result: 'matched' }], triggers: [{ areaCode: 'header', fieldCode: 'name', rowIndex: 0, source: 'entry-value', value: 1 }] }, snapshot);
+    const second = traceEventView({ ...event, id: 'event-2', conditions: [{ key: 'rule-1', result: 'matched' }], triggers: [{ areaCode: 'detail', fieldCode: 'name', rowIndex: 0, source: 'entry-value', value: 2 }] }, snapshot);
+    const legacy = traceEventView(event, snapshot);
+    const groups = traceGroups([first, second, legacy], [{ key: 'rule-1', label: '金额条件' }]);
+    expect(groups.map((group) => [group.areaName, group.total])).toEqual([['单据头', 2], ['明细', 1]]);
+    expect(groups[0]?.conditions.map((condition) => condition.label)).toEqual(['金额条件', '计算触发 · triggerComputeMixin']);
+  });
+
+  it('计算事件按触发源区域归组，不把目标区域误当成触发字段区域', () => {
+    const view = traceEventView({ ...event, areaCode: 'detail', fieldCode: 'result', triggers: [{ areaCode: 'header', fieldCode: 'name', rowIndex: 0, source: 'entry-value', value: 1 }] }, snapshot);
+    expect(traceGroups([view])[0]?.areaCode).toBe('header');
+  });
+
+  it('相同触发字段和值只保留一条，并标记重复次数', () => {
+    const trigger = { areaCode: 'header', fieldCode: 'name', rowIndex: 0, source: 'entry-value' as const, value: 111 };
+    const first = traceEventView({ ...event, triggers: [trigger] }, snapshot);
+    const second = traceEventView({ ...event, id: 'event-2', triggers: [trigger] }, snapshot);
+    const third = traceEventView({ ...event, id: 'event-3', triggers: [{ ...trigger, value: 222 }] }, snapshot);
+    const condition = traceGroups([first, second, third])[0]?.conditions[0];
+    expect(condition?.total).toBe(3);
+    expect(condition?.events).toHaveLength(2);
+    expect(condition?.events[0]?.repeatCount).toBe(2);
+    expect(condition?.events[1]?.repeatCount).toBe(1);
+  });
+
+  it('将旧区域名称补充信息展示为附加区', () => {
+    const view = traceEventView({ ...event, triggers: [{ areaCode: '补充信息', fieldCode: 'name', rowIndex: 0, source: 'entry-value', value: 1 }] }, snapshot);
+    expect(traceGroups([view])[0]?.areaName).toBe('附加区');
   });
 });

@@ -4,7 +4,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import type { InspectionSelection, TraceSession } from '@zfs-boe-inspector/shared-types';
 import { pageBridge } from './bridge';
 import { formatLocalDateTime } from './time';
-import { TraceViewCache, mergeTraceUpdate, traceCursor } from './traceView';
+import { TraceViewCache, mergeTraceUpdate, traceCursor, traceGroups, traceTime } from './traceView';
 import TraceEventCard from './TraceEventCard.vue';
 
 const props = defineProps<{ instanceId: string; supported: boolean; pageId: string; incremental: boolean; valuesSupported: boolean }>();
@@ -15,8 +15,8 @@ const emit = defineEmits<{
 const session = shallowRef<TraceSession>();
 const views = shallowRef<ReturnType<TraceViewCache['read']>>([]);
 const cache = new TraceViewCache();
-const page = ref(1);
-const pageSize = 50;
+const conditionPageSize = 50;
+const conditionPages = ref<Record<string, number>>({});
 const snapshotsOpen = ref(false);
 const snapshots = shallowRef<{ start: TraceSession['startSnapshot']; end?: TraceSession['endSnapshot'] }>();
 const snapshotJson = computed(() => snapshotsOpen.value ? JSON.stringify(snapshots.value, null, 2) : '');
@@ -24,19 +24,49 @@ let generation = 0;
 const error = ref('');
 const busy = ref(false);
 const filter = ref('');
+const filterInput = ref('');
+let filterTimer: ReturnType<typeof window.setTimeout> | undefined;
 let timer: ReturnType<typeof setInterval> | undefined;
 let reading = false;
 let disposed = false;
-const events = computed(() => views.value.filter((event) => event.search.includes(filter.value.trim().toLowerCase())));
-const pageCount = computed(() => Math.max(1, Math.ceil(events.value.length / pageSize)));
-const visibleEvents = computed(() => events.value.slice((page.value - 1) * pageSize, page.value * pageSize));
-watch(filter, () => { page.value = 1; });
-watch(pageCount, (count) => { page.value = Math.min(page.value, count); });
+const conditionSearch = computed(() => new Map((session.value?.conditionDefinitions ?? []).map((definition) => [
+  definition.key,
+  `${definition.key} ${definition.ruleId ?? ''} ${definition.label ?? ''} ${definition.expression === undefined ? '' : JSON.stringify(definition.expression)}`.toLowerCase(),
+])));
+const events = computed(() => {
+  const keyword = filter.value.trim().toLowerCase();
+  return views.value.filter((event) => `${event.search} ${(event.event.conditions ?? []).map((condition) => conditionSearch.value.get(condition.key) ?? condition.key).join(' ')}`.includes(keyword));
+});
+const groups = computed(() => traceGroups(events.value, session.value?.conditionDefinitions));
+const visibleGroups = computed(() => groups.value.map((group) => ({
+  ...group,
+  conditions: group.conditions.map((condition) => {
+    const paginationKey = `${group.key}:${condition.key}`;
+    const pageCount = Math.max(1, Math.ceil(condition.events.length / conditionPageSize));
+    const page = Math.min(conditionPages.value[paginationKey] ?? 1, pageCount);
+    return {
+      ...condition,
+      paginationKey,
+      page,
+      pageCount,
+      events: condition.events.slice((page - 1) * conditionPageSize, page * conditionPageSize),
+    };
+  }).filter((condition) => condition.events.length),
+})).filter((group) => group.conditions.length));
+watch(filterInput, (value) => {
+  if (filterTimer) window.clearTimeout(filterTimer);
+  filterTimer = window.setTimeout(() => { filter.value = value; }, 150);
+});
+watch(filter, () => { conditionPages.value = {}; });
+
+function setConditionPage(paginationKey: string, page: number) {
+  conditionPages.value = { ...conditionPages.value, [paginationKey]: Math.max(1, page) };
+}
 
 function accept(result: TraceSession | undefined, reset = false) {
   const next = result?.instanceId === props.instanceId ? result : undefined;
   const previous = session.value;
-  if (reset || previous?.id !== next?.id) { cache.clear(); page.value = 1; snapshotsOpen.value = false; }
+  if (reset || previous?.id !== next?.id) { cache.clear(); conditionPages.value = {}; snapshotsOpen.value = false; }
   if (reset || previous?.id !== next?.id || previous?.events.length !== next?.events.length) views.value = cache.read(next);
   if (previous?.startSnapshot !== next?.startSnapshot || previous?.endSnapshot !== next?.endSnapshot) {
     snapshots.value = next ? { start: next.startSnapshot, ...(next.endSnapshot ? { end: next.endSnapshot } : {}) } : undefined;
@@ -101,7 +131,7 @@ watch(() => [props.instanceId, props.supported, props.pageId], () => {
     timer = setInterval(() => { if (session.value?.active) void read(); }, 1000);
   }
 }, { immediate: true });
-onBeforeUnmount(() => { disposed = true; generation += 1; cache.clear(); if (timer) clearInterval(timer); });
+onBeforeUnmount(() => { disposed = true; generation += 1; cache.clear(); if (timer) clearInterval(timer); if (filterTimer) window.clearTimeout(filterTimer); });
 </script>
 
 <template>
@@ -124,7 +154,7 @@ onBeforeUnmount(() => { disposed = true; generation += 1; cache.clear(); if (tim
       <button :disabled="busy || !session" @click="action('clear')">
         清空
       </button>
-      <input v-model="filter" placeholder="筛选字段、值、区域、过程或报错">
+      <input v-model="filterInput" placeholder="筛选字段、值、区域、过程或报错">
     </div>
     <DismissibleNotice v-if="error" :notice-key="error" class="error-banner" role="alert" @close="error = ''">
       {{ error }}
@@ -135,6 +165,9 @@ onBeforeUnmount(() => { disposed = true; generation += 1; cache.clear(); if (tim
           · 结束 {{ formatLocalDateTime(session.stoppedAt) }}
         </template> · {{ session.reason }}
       </p>
+      <DismissibleNotice v-if="session.stopDetail && !['user', 'instance-changed'].includes(session.stopDetail.code)" :notice-key="`${session.id}:${session.stopDetail.code}`" class="warnings">
+        记录因{{ session.stopDetail.code === 'recursion-depth' ? '同步调用深度过高' : session.stopDetail.code === 'event-storm' ? '事件速率过高' : session.stopDetail.code === 'event-limit' ? '事件数量达到上限' : session.stopDetail.code === 'size-limit' ? '记录容量达到上限' : '采集保护' }}停止；已保留 {{ session.events.length }} 条事件。
+      </DismissibleNotice>
       <details>
         <summary>追踪覆盖与证据缺口</summary>
         <p v-for="capability in session.coverage" :key="capability.method">
@@ -147,16 +180,29 @@ onBeforeUnmount(() => { disposed = true; generation += 1; cache.clear(); if (tim
       <p v-if="!events.length" class="muted">
         {{ session.events.length ? '当前筛选条件下没有记录。' : '尚未记录到事件。' }}
       </p>
-      <TraceEventCard v-for="item in visibleEvents" :key="`${session.id}:${item.event.id}`" :item="item" :active="session.active" @analyze="(id, selection) => emit('analyze', id, selection)" />
-      <div v-if="events.length > pageSize" class="list-pagination">
-        <button :disabled="page === 1" @click="page -= 1">
-          上一页
-        </button>
-        <span>第 {{ page }} / {{ pageCount }} 页 · {{ events.length }} 条匹配记录</span>
-        <button :disabled="page === pageCount" @click="page += 1">
-          下一页
-        </button>
-      </div>
+      <details v-for="group in visibleGroups" :key="`${session.id}:${group.key}`" class="trace-area-group" open>
+        <summary>
+          <span class="trace-area-summary">
+            <span class="trace-area-label">区域名称：</span>
+            <strong>{{ group.areaName }}</strong>
+            <span class="trace-group-count">{{ group.total }} 条</span>
+            <span class="trace-group-time">· {{ traceTime(group.firstAt) }}—{{ traceTime(group.lastAt) }}</span>
+          </span>
+        </summary>
+        <details v-for="condition in group.conditions" :key="`${group.key}:${condition.key}`" class="trace-condition-group">
+          <summary><span class="trace-condition-summary"><strong>{{ condition.label }}</strong><span class="muted">{{ condition.total }} 条</span></span></summary>
+          <TraceEventCard v-for="item in condition.events" :key="`${session.id}:${item.event.id}`" :item="item" :active="session.active" @analyze="(id, selection) => emit('analyze', id, selection)" />
+          <div v-if="condition.pageCount > 1" class="list-pagination trace-condition-pagination">
+            <button :disabled="condition.page === 1" @click.stop="setConditionPage(condition.paginationKey, condition.page - 1)">
+              上一页
+            </button>
+            <span>第 {{ condition.page }} / {{ condition.pageCount }} 页 · {{ condition.total }} 条记录</span>
+            <button :disabled="condition.page === condition.pageCount" @click.stop="setConditionPage(condition.paginationKey, condition.page + 1)">
+              下一页
+            </button>
+          </div>
+        </details>
+      </details>
       <details @toggle="snapshotsOpen = ($event.target as HTMLDetailsElement).open">
         <summary>记录前后快照 · 原始数据</summary><pre v-if="snapshotsOpen">{{ snapshotJson }}</pre>
       </details>
