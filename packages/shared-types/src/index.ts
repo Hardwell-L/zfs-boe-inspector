@@ -129,6 +129,8 @@ export interface FieldSelection {
   areaCode: string;
   fieldCode: string;
   rowIndex: number;
+  /** 原始 areaFields 配置索引，与数据行号无关。 */
+  fieldIndex?: number;
   domId?: string;
 }
 
@@ -203,6 +205,15 @@ export interface DependencyDetail {
   omittedRows: number;
 }
 
+export interface TraceTrigger {
+  areaCode: string;
+  fieldCode: string;
+  rowIndex?: number;
+  value?: JsonValue;
+  source: 'argument' | 'entry-value' | 'event-before' | 'unavailable';
+  reason?: 'legacy-adapter' | 'data-unavailable' | 'invalid-row' | 'row-missing' | 'field-missing' | 'read-error';
+}
+
 export interface TraceEvent {
   id: string;
   parentId?: string;
@@ -218,6 +229,8 @@ export interface TraceEvent {
   areaCode?: string;
   fieldCode?: string;
   rowIndex?: number;
+  triggers?: TraceTrigger[];
+  triggersOmitted?: number;
 }
 
 export interface TraceSession {
@@ -232,6 +245,19 @@ export interface TraceSession {
   limitations: string[];
   startSnapshot: BoeInspectionSnapshot;
   endSnapshot?: BoeInspectionSnapshot;
+}
+
+/** 按已接收事件数量读取；事件结束顺序可能与 id 顺序不同。 */
+export interface TraceCursor {
+  sessionId: string;
+  offset: number;
+  ended?: boolean;
+}
+
+export interface TraceUpdate extends Omit<TraceSession, 'startSnapshot'> {
+  reset: boolean;
+  eventOffset: number;
+  startSnapshot?: BoeInspectionSnapshot;
 }
 
 export interface ModelInspectionContext {

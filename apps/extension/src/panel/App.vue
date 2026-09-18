@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import DismissibleNotice from './DismissibleNotice.vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   buildRuleDiagnostics,
   buildTravelView,
@@ -23,8 +24,11 @@ import type {
 } from '@zfs-boe-inspector/shared-types';
 import { pageBridge } from './bridge';
 import { scopeIdentity } from './aiContext';
+import { useAiWorkspace, sourceIdentity, type AiSession } from './useAiWorkspace';
 import AiPanel from './AiPanel.vue';
 import TracePanel from './TracePanel.vue';
+import ValidationRules from './ValidationRules.vue';
+import { fieldAreas, indexedFieldDetail, issueItems } from './inspectionView';
 import { dynamicDisplayModel, hasDisplayText } from './ruleDiagnosticView';
 
 type ViewKey = 'overview' | 'fields' | 'rules' | 'issues' | 'travel' | 'runtime' | 'trace' | 'ai';
@@ -43,21 +47,27 @@ const propertyTab = ref<PropertyTab>('base');
 const activeInstanceId = ref('');
 const fieldSearch = ref('');
 const issueFilter = ref<'all' | 'error' | 'warning' | 'info' | 'skipped'>('all');
+const issueArea = ref('');
+const issueType = ref('');
+const issueSearch = ref('');
+const issuePage = ref(1);
+const issuePageSize = 50;
+let fieldRequest = 0;
 const pickerActive = ref(false);
 const ruleTab = ref<RuleTab>('validation');
 const onlyRuleIssues = ref(false);
 const showRuleTechnical = ref(false);
-const aiBusy = ref(false);
-const aiPanel = ref<InstanceType<typeof AiPanel>>();
-const aiAnalysisId = ref(0);
+const aiWorkspace = useAiWorkspace(refreshAiSnapshot);
+const aiBusy = computed(() => aiWorkspace.busy);
 const pickerDestination = ref<'fields' | 'ai'>('fields');
 let pickerRun = 0;
 let pickerInstanceId = '';
 let pickerAccepted = new Set<string>();
 const pickerMode = ref<'field' | 'area'>('field');
-const aiScopes = ref<InspectionSelection[]>([]);
 const traceSession = ref<TraceSession>();
-const aiEventId = ref('');
+let pickerPageId = '';
+let pickerSessionId = 0;
+let pageEpoch = 0;
 let pickerTimer: ReturnType<typeof setInterval> | undefined;
 
 const navItems: Array<{ key: ViewKey; label: string }> = [
@@ -91,25 +101,45 @@ const ruleTabs: Array<{ key: RuleTab; label: string }> = [
   { key: 'applyBoe', label: '关联申请' },
 ];
 
-const areas = computed(() => (snapshot.value?.config.template ?? []).flatMap((value, areaIndex) => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
-  const area = value as Record<string, any>;
-  const fields = Array.isArray(area.areaFields) ? area.areaFields : [];
+const allAreas = computed(() => fieldAreas(snapshot.value));
+const areas = computed(() => {
   const keyword = fieldSearch.value.trim().toLowerCase();
-  const matchedFields = fields.filter((field: Record<string, any>) => {
-    if (!keyword) return true;
-    return [field.fieldCode, field.fieldName, field.labelCode, field.fieldType]
-      .some((item) => String(item ?? '').toLowerCase().includes(keyword));
+  return allAreas.value.flatMap((area) => {
+    const areaMatch = `${area.areaName} ${area.areaCode}`.toLowerCase().includes(keyword);
+    const fields = area.fields.filter((field) => areaMatch || [field.fieldCode, field.fieldName, field.labelCode, field.fieldType]
+      .some((value) => String(value ?? '').toLowerCase().includes(keyword)));
+    return fields.length || areaMatch ? [{ ...area, fields }] : [];
   });
-  if (keyword && matchedFields.length === 0 && !String(area.areaName ?? area.areaCode).toLowerCase().includes(keyword)) return [];
-  return [{ areaIndex, areaCode: String(area.areaCode ?? ''), areaName: String(area.areaName ?? area.areaCode ?? ''), fields: matchedFields }];
+});
+const selectedDuplicate = computed(() => {
+  const selection = selectedField.value?.selection;
+  return allAreas.value.find((area) => area.areaCode === selection?.areaCode)?.fields.find((field) => field.fieldIndex === selection?.fieldIndex);
+});
+const versionRows = computed(() => snapshot.value ? [
+  { name: 'Adapter', version: snapshot.value.meta.adapterVersion },
+  { name: 'Vue', version: snapshot.value.meta.vueVersion },
+  ...Object.entries(snapshot.value.meta.zfsPackages ?? {}).map(([name, version]) => ({ name, version })),
+  { name: 'Snapshot Schema', version: snapshot.value.schemaVersion },
+] : []);
+const issueModel = computed(() => issueItems(snapshot.value, report.value?.evaluations ?? [],
+  Object.values(ruleDiagnostics.value ?? {}).flatMap((model) => model.entries)));
+const filteredIssues = computed(() => issueModel.value.filter((item) => {
+  const evaluation = item.evaluation;
+  if (issueFilter.value === 'skipped' ? evaluation.status !== 'skipped' : evaluation.status !== 'issue') return false;
+  if (!['all', 'skipped'].includes(issueFilter.value) && evaluation.severity !== issueFilter.value) return false;
+  if (issueType.value && item.type !== issueType.value) return false;
+  if (issueArea.value && !(issueArea.value === '__global' ? !item.areaCodes.length : item.areaCodes.includes(issueArea.value))) return false;
+  return item.search.includes(issueSearch.value.trim().toLowerCase());
 }));
-
-const filteredEvaluations = computed(() => (report.value?.evaluations ?? []).filter((item) => {
-  if (issueFilter.value === 'all') return item.status === 'issue';
-  if (issueFilter.value === 'skipped') return item.status === 'skipped';
-  return item.status === 'issue' && item.severity === issueFilter.value;
-}));
+const issuePageCount = computed(() => Math.max(1, Math.ceil(filteredIssues.value.length / issuePageSize)));
+const visibleIssues = computed(() => filteredIssues.value.slice((issuePage.value - 1) * issuePageSize, issuePage.value * issuePageSize));
+watch([issueArea, issueType, issueFilter, issueSearch, report], () => { issuePage.value = 1; });
+const issueGroups = computed(() => [
+  ...allAreas.value.map((area) => ({ code: area.areaCode, name: area.areaName })),
+  { code: '__global', name: '全局／未定位' },
+].filter((area) => !issueArea.value || area.code === issueArea.value).map((area) => ({ ...area,
+  items: visibleIssues.value.filter((item) => area.code === '__global' ? !item.areaCodes.length : item.areaCodes.includes(area.code)),
+})).filter((area) => area.items.length));
 
 const propertyTabs = computed(() => selectedArea.value ? areaTabs : fieldTabs);
 const activePropertyGroup = computed(() => (selectedArea.value?.groups ?? selectedField.value?.groups)
@@ -151,32 +181,40 @@ function pretty(value: unknown) {
 }
 
 async function refresh() {
+  const epoch = pageEpoch;
   loading.value = true;
   error.value = '';
   try {
-    status.value = await pageBridge.getStatus();
+    const nextStatus = await pageBridge.getStatus();
+    if (epoch !== pageEpoch) return;
+    status.value = nextStatus;
     if (!status.value.connected) {
       resetSelection();
       snapshot.value = undefined;
       report.value = undefined;
+      aiWorkspace.setSource(undefined);
       return;
     }
     if (!status.value.instances.some((instance) => instance.instanceId === activeInstanceId.value)) {
       activeInstanceId.value = status.value.activeInstanceId || status.value.instances[0]?.instanceId || '';
     }
-    const next = await pageBridge.getSnapshot(activeInstanceId.value || undefined);
+    const { snapshot: next, pageId } = await pageBridge.getAiSnapshot(activeInstanceId.value || undefined);
+    if (epoch !== pageEpoch) return;
     if (snapshot.value && (snapshot.value.instanceId !== next.instanceId || snapshot.value.meta.projectCode !== next.meta.projectCode)) resetSelection();
     snapshot.value = next;
     report.value = runInspection(snapshot.value, baseRuleEvaluators);
+    activeInstanceId.value = next.instanceId;
+    aiWorkspace.setSource({ snapshot: next, evaluations: report.value.evaluations, pageId });
     if (selectedArea.value) {
       selectedArea.value = await pageBridge.getAreaDetail(selectedArea.value.areaCode, activeInstanceId.value);
     }
     if (selectedField.value) {
-      selectedField.value = await pageBridge.getFieldDetail(selectedField.value.selection, activeInstanceId.value);
+      await selectField(selectedField.value.selection);
     }
   } catch (reason) {
     snapshot.value = undefined;
     report.value = undefined;
+    aiWorkspace.setSource(undefined);
     error.value = reason instanceof Error ? reason.message : String(reason);
   } finally {
     loading.value = false;
@@ -184,8 +222,7 @@ async function refresh() {
 }
 
 function resetSelection() {
-  aiScopes.value = [];
-  aiEventId.value = '';
+  fieldRequest += 1;
   traceSession.value = undefined;
   selectedArea.value = undefined;
   selectedField.value = undefined;
@@ -201,8 +238,10 @@ async function changeInstance() {
 }
 
 async function selectArea(areaCode: string) {
+  const request = ++fieldRequest;
   try {
     const detail = await pageBridge.getAreaDetail(areaCode, activeInstanceId.value);
+    if (request !== fieldRequest) return;
     if (!detail) throw new Error(`未找到区域配置：${areaCode}`);
     selectedArea.value = detail;
     selectedField.value = undefined;
@@ -210,14 +249,24 @@ async function selectArea(areaCode: string) {
     await nextTick();
     document.querySelector('.property-panel')?.scrollTo({ top: 0, behavior: 'smooth' });
   } catch (reason) {
+    if (request !== fieldRequest) return;
     error.value = reason instanceof Error ? reason.message : String(reason);
   }
 }
 
 async function selectField(selection: FieldSelection, navigate = false) {
+  const request = ++fieldRequest;
   try {
-    const detail = await pageBridge.getFieldDetail(selection, activeInstanceId.value);
-    if (!detail) throw new Error(`未找到字段配置：${selection.areaCode}.${selection.fieldCode}`);
+    let detail = await pageBridge.getFieldDetail(selection, activeInstanceId.value);
+    if (request !== fieldRequest) return;
+    if (selection.fieldIndex !== undefined && detail?.selection.fieldIndex !== selection.fieldIndex && snapshot.value) {
+      detail = indexedFieldDetail(snapshot.value, selection);
+    }
+    if (!detail) throw new Error(`未找到字段配置：${selection.areaCode}.${selection.fieldCode}，请刷新后重新选择`);
+    if (detail.selection.fieldIndex === undefined) {
+      const field = allAreas.value.find((area) => area.areaCode === detail.selection.areaCode)?.fields.find((item) => item.fieldCode === detail.selection.fieldCode);
+      if (field) detail.selection = { ...detail.selection, fieldIndex: field.fieldIndex };
+    }
     selectedArea.value = undefined;
     selectedField.value = detail;
     propertyTab.value = 'base';
@@ -226,10 +275,12 @@ async function selectField(selection: FieldSelection, navigate = false) {
       view.value = 'fields';
       await nextTick();
       window.requestAnimationFrame(() => {
+        if (request !== fieldRequest) return;
         const fieldItem = Array.from(document.querySelectorAll('.field-item')).find((element) => (
           element instanceof window.HTMLElement
           && element.dataset.areaCode === detail.selection.areaCode
           && element.dataset.fieldCode === detail.selection.fieldCode
+          && (detail.selection.fieldIndex === undefined || element.dataset.fieldIndex === String(detail.selection.fieldIndex))
         ));
         fieldItem?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         const propertyPanel = document.querySelector('.property-panel');
@@ -240,6 +291,7 @@ async function selectField(selection: FieldSelection, navigate = false) {
     }
     return detail;
   } catch (reason) {
+    if (request !== fieldRequest) return;
     error.value = reason instanceof Error ? reason.message : String(reason);
   }
 }
@@ -247,13 +299,13 @@ async function selectField(selection: FieldSelection, navigate = false) {
 async function acceptAiTargets(state: PickerState, run: number) {
   const targets = state.targets ?? (state.target ? [state.target] : state.selection ? [{ kind: 'field' as const, ...state.selection }] : []);
   for (const target of targets) {
-    if (run !== pickerRun) return;
+    if (run !== pickerRun || aiWorkspace.current?.id !== pickerSessionId || !aiWorkspace.current || !aiWorkspace.available(aiWorkspace.current)) return;
     if (pickerAccepted.has(scopeIdentity(target))) continue;
     if (target.kind === 'field') {
-      const detail = await pageBridge.getFieldDetail(target, pickerInstanceId);
+      const detail = await pageBridge.getFieldDetail(target, pickerInstanceId, pickerPageId);
       if (run !== pickerRun) return;
-      if (detail) addAiScope({ kind: 'field', ...detail.selection });
-    } else addAiScope(target);
+      if (detail) aiWorkspace.addScope({ kind: 'field', ...detail.selection }, pickerSessionId, true);
+    } else aiWorkspace.addScope(target, pickerSessionId, true);
     pickerAccepted.add(scopeIdentity(target));
   }
 }
@@ -269,13 +321,27 @@ async function startPicker(mode: 'field' | 'area', destination: 'fields' | 'ai' 
     pickerDestination.value = destination;
     pickerInstanceId = activeInstanceId.value;
     pickerAccepted = new Set();
-    if (destination === 'ai') view.value = 'ai';
+    pickerPageId = '';
+    pickerSessionId = 0;
+    if (destination === 'ai') {
+      const session = aiWorkspace.current;
+      if (!session || !aiWorkspace.available(session)) throw new Error('请返回对应单据后选择范围');
+      pickerSessionId = session.id;
+      pickerPageId = session.source.pageId;
+      aiWorkspace.state.pickerSessionId = session.id;
+      pickerActive.value = true;
+      const source = await refreshAiSnapshot(session, true);
+      if (run !== pickerRun) return;
+      if (sourceIdentity(source) !== session.binding) throw new Error('单据已变化，请新建会话');
+      view.value = 'ai';
+    }
+    if (run !== pickerRun) return;
     const modern = status.value?.capabilities?.includes('area-picker');
     if (!modern && mode === 'area') throw new Error('当前 Adapter 不支持页面区域选择，请升级 Adapter 或从配置列表选择区域');
     if (modern) await pageBridge.startPicker(mode, pickerInstanceId, {
       continuous: destination === 'ai' && Boolean(status.value?.capabilities?.includes('continuous-picker')),
-    });
-    else await pageBridge.startFieldPicker();
+    }, pickerPageId);
+    else await pageBridge.startFieldPicker(pickerPageId);
     if (run !== pickerRun) return;
     pickerActive.value = true;
     if (pickerTimer) clearInterval(pickerTimer);
@@ -283,12 +349,13 @@ async function startPicker(mode: 'field' | 'area', destination: 'fields' | 'ai' 
       if (polling) return;
       polling = true;
       try {
-        const state = await pageBridge.getFieldPickerState();
+        const state = await pageBridge.getFieldPickerState(pickerPageId);
         if (run !== pickerRun) return;
         if (destination === 'ai') await acceptAiTargets(state, run);
         if (run !== pickerRun) return;
         pickerActive.value = state.active;
         if (!state.active) {
+          aiWorkspace.state.pickerSessionId = 0;
           if (pickerTimer) clearInterval(pickerTimer);
           pickerTimer = undefined;
           const target = state.target ?? (state.selection ? { kind: 'field' as const, ...state.selection } : undefined);
@@ -302,8 +369,9 @@ async function startPicker(mode: 'field' | 'area', destination: 'fields' | 'ai' 
         }
       } catch (reason) {
         if (run !== pickerRun) return;
-        await pageBridge.cancelFieldPicker().catch(() => {});
+        await pageBridge.cancelFieldPicker(pickerPageId).catch(() => {});
         pickerActive.value = false;
+        aiWorkspace.state.pickerSessionId = 0;
         if (pickerTimer) clearInterval(pickerTimer);
         pickerTimer = undefined;
         error.value = reason instanceof Error ? reason.message : String(reason);
@@ -312,6 +380,7 @@ async function startPicker(mode: 'field' | 'area', destination: 'fields' | 'ai' 
   } catch (reason) {
     if (run !== pickerRun) return;
     pickerActive.value = false;
+    aiWorkspace.state.pickerSessionId = 0;
     error.value = reason instanceof Error ? reason.message : String(reason);
   }
 }
@@ -321,9 +390,9 @@ async function cancelPicker(keepAiScopes = true) {
   if (pickerTimer) clearInterval(pickerTimer);
   pickerTimer = undefined;
   try {
-    const state = await pageBridge.cancelFieldPicker();
+    const state = await pageBridge.cancelFieldPicker(pickerPageId);
     if (keepAiScopes && pickerDestination.value === 'ai') await acceptAiTargets(state, run);
-  } finally { pickerActive.value = false; }
+  } finally { pickerActive.value = false; aiWorkspace.state.pickerSessionId = 0; }
 }
 
 function exportReport() {
@@ -345,49 +414,36 @@ function diagnosticClass(entry: RuleDiagnosticEntry) {
   return entry.state === 'issue' ? entry.severity ?? 'error' : entry.state;
 }
 
-function updateAiScopes(scopes: InspectionSelection[]) {
-  if (aiBusy.value) return;
-  aiScopes.value = scopes;
-}
-
-function addAiScope(selection: InspectionSelection) {
-  if (aiBusy.value || aiScopes.value.some((item) => scopeIdentity(item) === scopeIdentity(selection))) return;
-  aiScopes.value = [...aiScopes.value, selection];
-}
-
 async function openAiConversation(selection?: InspectionSelection, append = false, eventId = '') {
   if (aiBusy.value || loading.value) return;
   if (pickerActive.value) {
     try { await cancelPicker(false); }
     catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); return; }
   }
-  if (aiBusy.value || loading.value) return;
-  if (append) {
-    if (selection) addAiScope(selection);
-  } else {
-    aiScopes.value = selection ? [selection] : [];
-    aiEventId.value = eventId;
-    aiAnalysisId.value += 1;
-  }
+  const current = aiWorkspace.current;
+  if (append && current && aiWorkspace.available(current)) {
+    if (selection) aiWorkspace.addScope(selection);
+    aiWorkspace.select(current.id);
+  } else aiWorkspace.create(selection ? [selection] : [], eventId ? traceSession.value : undefined, eventId);
   view.value = 'ai';
-  await nextTick();
-  aiPanel.value?.showConversation();
 }
 
-async function refreshAiSnapshot() {
-  if (loading.value || pickerActive.value) throw new Error('请等待当前读取或页面选择结束');
-  const instanceId = activeInstanceId.value;
-  const projectCode = snapshot.value?.meta.projectCode;
-  loading.value = true;
+async function refreshAiSnapshot(session: AiSession, forPicker = false) {
+  if (loading.value || (pickerActive.value && !forPicker)) throw new Error('请等待当前读取或页面选择结束');
+  const { snapshot: next, pageId } = await pageBridge.getAiSnapshot(session.source.snapshot.instanceId, session.source.pageId);
+  const nextReport = runInspection(next, baseRuleEvaluators);
+  return { snapshot: next, evaluations: nextReport.evaluations, pageId };
+}
+
+async function locateAiSelection(selection: InspectionSelection) {
+  const session = aiWorkspace.current;
+  if (!session || !aiWorkspace.mutable(session)) return;
   try {
-    const next = await pageBridge.getSnapshot(instanceId);
-    if (activeInstanceId.value !== instanceId || next.instanceId !== instanceId || next.meta.projectCode !== projectCode) {
-      throw new Error('单据实例已变化，请重新选择单据后开始分析');
-    }
-    const nextReport = runInspection(next, baseRuleEvaluators);
-    snapshot.value = next;
-    report.value = nextReport;
-  } finally { loading.value = false; }
+    const source = await refreshAiSnapshot(session);
+    if (sourceIdentity(source) !== session.binding) throw new Error('单据已变化，请返回原单据');
+    const found = await pageBridge.locateAiSelection(selection, session.source.snapshot.instanceId, session.source.pageId);
+    if (!found) session.error = '当前字段或区域在页面中不可见';
+  } catch (reason) { session.error = reason instanceof Error ? reason.message : String(reason); }
 }
 
 async function locateSelection(selection: InspectionSelection) {
@@ -402,7 +458,6 @@ async function locateSelection(selection: InspectionSelection) {
 }
 
 function updateTrace(session: TraceSession | undefined) {
-  if (traceSession.value?.id !== session?.id) aiEventId.value = '';
   traceSession.value = session;
 }
 
@@ -437,11 +492,33 @@ function amountValue(value: number | string | undefined, currency = '') {
   return `${value}${currency && currency !== '—' ? ` ${currency}` : ''}`;
 }
 
-onMounted(refresh);
+function invalidateAiPage() { pageEpoch += 1; aiWorkspace.setSource(undefined); }
+async function onTabActivated() {
+  if (chrome.devtools?.inspectedWindow) return;
+  const source = aiWorkspace.state.source;
+  if (!source) return;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (aiWorkspace.state.source === source && tab?.id !== (JSON.parse(source.pageId) as [number])[0]) invalidateAiPage();
+}
+function onTabChanged(tabId: number, info: chrome.tabs.OnUpdatedInfo) {
+  const pageId = aiWorkspace.state.source?.pageId;
+  const boundTab = pageId ? (JSON.parse(pageId) as [number])[0] : undefined;
+  if (tabId === boundTab && (info.status === 'loading' || info.url)) invalidateAiPage();
+}
+onMounted(() => {
+  void aiWorkspace.load();
+  void refresh();
+  chrome.tabs.onActivated.addListener(onTabActivated);
+  chrome.tabs.onUpdated.addListener(onTabChanged);
+  chrome.devtools?.network?.onNavigated.addListener(invalidateAiPage);
+});
 onBeforeUnmount(() => {
+  chrome.tabs.onActivated.removeListener(onTabActivated);
+  chrome.tabs.onUpdated.removeListener(onTabChanged);
+  chrome.devtools?.network?.onNavigated.removeListener(invalidateAiPage);
   pickerRun += 1;
   if (pickerTimer) clearInterval(pickerTimer);
-  if (pickerActive.value) void pageBridge.cancelFieldPicker();
+  if (pickerActive.value) void pageBridge.cancelFieldPicker(pickerPageId);
 });
 </script>
 
@@ -482,15 +559,10 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div v-if="error" class="error-banner">
+    <DismissibleNotice v-if="error" :notice-key="error" class="error-banner" role="alert" @close="error = ''">
       {{ error }}
-    </div>
-    <div v-if="!status?.connected && !loading" class="empty-state">
-      <h2>尚未检测到 BOE Runtime Adapter</h2>
-      <p>请安装 Adapter，并按项目接入文档在 local billTemplate.vue 中注册 Inspector；标准差旅会自动注册。</p>
-    </div>
-
-    <div v-else class="workspace">
+    </DismissibleNotice>
+    <div class="workspace">
       <nav class="sidebar">
         <button v-for="item in navItems" :key="item.key" :class="{ active: view === item.key }" @click="view = item.key">
           {{ item.label }}
@@ -499,6 +571,10 @@ onBeforeUnmount(() => {
       </nav>
 
       <main class="content" :class="{ 'content-ai': view === 'ai' }">
+        <div v-if="!snapshot && !loading && view !== 'ai'" class="empty-state">
+          <h2>尚未检测到 BOE Runtime Adapter</h2>
+          <p>请在已接入 Adapter 的 BOE 页面刷新快照。已有 AI 会话仍可从左侧进入查看。</p>
+        </div>
         <section v-if="view === 'overview' && snapshot" class="section">
           <h2>单据概览</h2>
           <div class="metric-grid">
@@ -506,16 +582,25 @@ onBeforeUnmount(() => {
             <article><span>环境</span><strong>{{ snapshot.meta.environment }}</strong></article>
             <article><span>BOE 类型</span><strong>{{ snapshot.meta.boeTypeCode || '—' }}</strong></article>
             <article><span>单据状态</span><strong>{{ snapshot.meta.boeStatus || '—' }}</strong></article>
-            <article><span>字段数量</span><strong>{{ areas.reduce((sum, area) => sum + area.fields.length, 0) }}</strong></article>
+            <article><span>字段数量</span><strong>{{ allAreas.reduce((sum, area) => sum + area.fields.length, 0) }}</strong></article>
             <article><span>诊断问题</span><strong>{{ report?.summary.issues ?? 0 }}</strong></article>
           </div>
           <h3>版本信息</h3>
-          <pre>{{ pretty({ adapter: snapshot.meta.adapterVersion, vue: snapshot.meta.vueVersion, zfs: snapshot.meta.zfsPackages, schemaVersion: snapshot.schemaVersion }) }}</pre>
-          <div v-if="snapshot.warnings?.length" class="warnings">
+          <div class="table-scroll version-list">
+            <table class="data-table">
+              <thead><tr><th>组件</th><th>版本</th></tr></thead>
+              <tbody>
+                <tr v-for="row in versionRows" :key="row.name">
+                  <td>{{ row.name }}</td><td>{{ row.version ?? '未采集' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <DismissibleNotice v-if="snapshot.warnings?.length" :notice-key="`${snapshot.instanceId}:${snapshot.warnings.join()}`" class="warnings">
             <p v-for="warning in snapshot.warnings" :key="warning">
               {{ warning }}
             </p>
-          </div>
+          </DismissibleNotice>
         </section>
 
         <section v-if="view === 'fields'" class="field-layout">
@@ -532,22 +617,24 @@ onBeforeUnmount(() => {
               </button>
               <button
                 v-for="field in area.fields"
-                :key="field.fieldCode"
+                :key="field.fieldIndex"
                 class="field-item"
                 :data-area-code="area.areaCode"
                 :data-field-code="field.fieldCode"
-                :class="{ active: selectedField?.selection.areaCode === area.areaCode && selectedField?.selection.fieldCode === field.fieldCode }"
-                @click="selectField({ areaCode: area.areaCode, fieldCode: field.fieldCode, rowIndex: 0 })"
+                :data-field-index="field.fieldIndex"
+                :class="{ active: selectedField?.selection.areaCode === area.areaCode && selectedField?.selection.fieldIndex === field.fieldIndex }"
+                @click="selectField({ areaCode: area.areaCode, fieldCode: String(field.fieldCode ?? ''), fieldIndex: field.fieldIndex, rowIndex: 0 })"
               >
-                <span>{{ field.fieldName || field.fieldCode }}</span>
+                <span>{{ field.fieldName || field.fieldCode || '未命名字段' }}</span>
+                <small v-if="field.duplicateCount > 1" class="duplicate-badge">重复 · {{ field.duplicateOrdinal }}/{{ field.duplicateCount }}</small>
                 <small>{{ field.fieldCode }} · {{ field.fieldType }}</small>
               </button>
             </div>
           </aside>
           <section class="property-panel">
-            <div v-if="pickerActive" class="picker-tip">
+            <DismissibleNotice v-if="pickerActive" :notice-key="pickerMode" class="picker-tip">
               请在被检查页面中点击一个 BOE {{ pickerMode === 'area' ? '区域' : '字段' }}，按 Esc 可取消。
-            </div>
+            </DismissibleNotice>
             <div v-if="!selectedArea && !selectedField" class="placeholder">
               从左侧列表选择区域或字段，也可以使用页面选择工具。
             </div>
@@ -555,6 +642,9 @@ onBeforeUnmount(() => {
               <h2>{{ (selectedField.field as any).fieldName || selectedField.selection.fieldCode }}</h2>
               <p class="muted">
                 {{ selectedField.selection.areaCode }}.{{ selectedField.selection.fieldCode }} · 第 {{ selectedField.selection.rowIndex + 1 }} 行
+              </p>
+              <p v-if="selectedDuplicate && selectedDuplicate.duplicateCount > 1" class="duplicate-notice">
+                重复配置 {{ selectedDuplicate.duplicateOrdinal }}/{{ selectedDuplicate.duplicateCount }} · 配置项独立展示，运行时值与状态按同一字段编码采集。
               </p>
               <div v-if="selectedField.runtimeState" class="runtime-flags">
                 <span>显示：{{ selectedField.runtimeState.visible }}</span>
@@ -591,10 +681,15 @@ onBeforeUnmount(() => {
                 <h3>{{ activePropertyGroup.label }}</h3>
                 <dl>
                   <template v-for="item in activePropertyGroup.items" :key="item.code">
-                    <dt :title="item.tips">
+                    <dt :title="item.tips" :class="{ 'full-property': selectedArea && item.code === 'validateRules' }">
                       {{ item.label }}
                     </dt>
-                    <dd>{{ propertyValue(item.value) }}</dd>
+                    <dd :class="{ 'full-property': selectedArea && item.code === 'validateRules' }">
+                      <ValidationRules v-if="selectedArea && item.code === 'validateRules'" :key="selectedArea.areaCode" :value="item.value" />
+                      <template v-else>
+                        {{ propertyValue(item.value) }}
+                      </template>
+                    </dd>
                   </template>
                 </dl>
               </article>
@@ -719,38 +814,80 @@ onBeforeUnmount(() => {
           </p>
         </section>
 
-        <section v-if="view === 'issues'" class="section">
+        <section v-if="view === 'issues'" class="section issues-panel">
           <div class="section-header">
-            <h2>问题列表</h2>
-            <select v-model="issueFilter">
-              <option value="all">
-                全部问题
+            <h2>问题列表</h2><span class="muted">{{ filteredIssues.length }} 条（跨区域问题去重）</span>
+          </div>
+          <div class="tool-actions issue-filters">
+            <select v-model="issueArea" aria-label="问题区域">
+              <option value="">
+                全部区域
               </option>
-              <option value="error">
-                Error
+              <option v-for="area in allAreas" :key="area.areaCode" :value="area.areaCode">
+                {{ area.areaName }} · {{ area.areaCode }}
               </option>
-              <option value="warning">
-                Warning
-              </option>
-              <option value="info">
-                Info
-              </option>
-              <option value="skipped">
-                Skipped
+              <option value="__global">
+                全局／未定位
               </option>
             </select>
+            <select v-model="issueType" aria-label="问题类型">
+              <option value="">
+                全部类型
+              </option><option value="field">
+                字段问题
+              </option><option value="rule">
+                规则问题
+              </option>
+            </select>
+            <select v-model="issueFilter" aria-label="问题级别">
+              <option value="all">
+                全部问题
+              </option><option value="error">
+                错误
+              </option><option value="warning">
+                警告
+              </option><option value="info">
+                提示
+              </option><option value="skipped">
+                未验证／跳过
+              </option>
+            </select>
+            <input v-model="issueSearch" placeholder="搜索问题、字段或规则编码" aria-label="搜索问题">
           </div>
-          <article v-for="evaluation in filteredEvaluations" :key="`${evaluation.ruleId}-${evaluation.summary}`" class="issue-card" :class="evaluationClass(evaluation)">
-            <div class="issue-title">
-              <span>{{ evaluation.severity || evaluation.status }}</span><strong>{{ evaluation.ruleId }}</strong>
+          <details v-for="group in issueGroups" :key="group.code" class="diagnostic-area" open>
+            <summary><strong>{{ group.name }} <small>{{ group.code === '__global' ? '' : group.code }}</small></strong><span>本页 {{ group.items.length }} 条</span></summary>
+            <div class="issue-group-content">
+              <template v-for="type in ['field', 'rule']" :key="type">
+                <h3 v-if="group.items.some((item) => item.type === type)">
+                  {{ type === 'field' ? '字段问题' : '规则问题' }}
+                </h3>
+                <article v-for="item in group.items.filter((entry) => entry.type === type)" :key="item.id" class="issue-card" :class="evaluationClass(item.evaluation)">
+                  <div class="issue-title">
+                    <span>{{ item.evaluation.severity || item.evaluation.status }}</span><strong>{{ item.categoryLabel }}</strong><small>{{ item.evaluation.ruleId }}</small>
+                  </div>
+                  <p>{{ item.evaluation.summary }}</p><p v-if="item.evaluation.reason" class="muted">
+                    {{ item.evaluation.reason }}
+                  </p>
+                  <div class="tool-actions">
+                    <button v-for="target in item.targets" :key="JSON.stringify(target.selection)" @click="selectField(target.selection, true)">
+                      查看字段配置 · {{ target.label }}
+                    </button>
+                  </div>
+                  <details><summary>证据路径</summary><code v-for="path in item.evaluation.evidencePaths" :key="path">{{ path }}</code></details>
+                </article>
+              </template>
             </div>
-            <p>{{ evaluation.summary }}</p>
-            <p v-if="evaluation.reason" class="muted">
-              {{ evaluation.reason }}
-            </p>
-            <code v-for="path in evaluation.evidencePaths" :key="path">{{ path }}</code>
-          </article>
-          <p v-if="filteredEvaluations.length === 0" class="placeholder">
+          </details>
+          <div v-if="filteredIssues.length > issuePageSize" class="list-pagination">
+            <button :disabled="issuePage === 1" @click="issuePage -= 1">
+              上一页
+            </button>
+            <span>第 {{ issuePage }} / {{ issuePageCount }} 页 · 每页最多 {{ issuePageSize }} 条问题</span>
+            <button :disabled="issuePage === issuePageCount" @click="issuePage += 1">
+              下一页
+            </button>
+          </div>
+          <p v-if="!filteredIssues.length" class="placeholder">
             当前筛选条件下没有问题。
           </p>
         </section>
@@ -853,35 +990,26 @@ onBeforeUnmount(() => {
 
         <TracePanel
           v-show="view === 'trace'"
+          :incremental="status?.capabilities?.includes('trace-incremental') ?? false"
+          :values-supported="status?.capabilities?.includes('trace-values') ?? false"
           :instance-id="activeInstanceId"
+          :page-id="aiWorkspace.state.source?.pageId || ''"
           :supported="Boolean(status?.capabilities?.includes('trace'))"
           @update="updateTrace"
           @analyze="analyzeTrace"
         />
 
         <AiPanel
-          v-if="snapshot && report"
           v-show="view === 'ai'"
-          ref="aiPanel"
           :active="view === 'ai'"
-          :analysis-id="aiAnalysisId"
+          :workspace="aiWorkspace"
           :refreshing="loading"
-          :refresh-snapshot="refreshAiSnapshot"
-          :snapshot="snapshot"
-          :evaluations="report.evaluations"
-          :scopes="aiScopes"
-          :trace="traceSession"
-          :event-id="aiEventId"
           :picker-active="pickerActive && pickerDestination === 'ai'"
           :continuous-picker="Boolean(status?.capabilities?.includes('continuous-picker'))"
           :area-picker="Boolean(status?.capabilities?.includes('area-picker'))"
           @pick="startPicker($event, 'ai')"
           @finish-picker="cancelPicker()"
-          @busy="aiBusy = $event"
-          @scopes="updateAiScopes"
-          @new-analysis="openAiConversation()"
-          @clear-event="aiEventId = ''"
-          @locate="locateSelection"
+          @locate="locateAiSelection"
         />
       </main>
     </div>

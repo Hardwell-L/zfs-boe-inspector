@@ -1,682 +1,473 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { BoeInspectionSnapshot, InspectionSelection, RuleEvaluation, TraceSession } from '@zfs-boe-inspector/shared-types';
-import { AI_SYSTEM_PROMPT, buildAiEvidence, createRedactor, scopeIdentity, scopeLabel, type AiEvidence, type EvidenceGroup } from './aiContext';
-import { aiRequestBody, defaultAiSettings, loadAiSettings, saveAiSettings, streamAnswer, testAiConnection, type ChatMessage, type StreamResult } from './aiClient';
-import { bytes, recentHistory, REQUEST_LIMIT, sentEvidence } from './aiConversation';
+import { computed, nextTick, ref, watch } from 'vue';
+import type { InspectionSelection } from '@zfs-boe-inspector/shared-types';
+import { scopeIdentity, scopeLabel, type EvidenceGroup } from './aiContext';
+import { bytes, REQUEST_LIMIT } from './aiConversation';
+import { scopeIssues } from './aiScopes';
+import { formatLocalDateTime } from './time';
+import type { AiAnswer, AiWorkspace } from './useAiWorkspace';
 import AiMarkdown from './AiMarkdown';
 import AiScopeSelector from './AiScopeSelector.vue';
-import { scopeIssues } from './aiScopes';
+import AiEvidenceView from './AiEvidenceView.vue';
+import DismissibleNotice from './DismissibleNotice.vue';
+import AiHistoryView from './AiHistoryView.vue';
 
-const props = defineProps<{
-  active: boolean;
-  analysisId: number;
-  refreshing: boolean;
-  refreshSnapshot: () => Promise<void>;
-  snapshot: BoeInspectionSnapshot;
-  evaluations: RuleEvaluation[];
-  scopes: InspectionSelection[];
-  trace?: TraceSession | undefined;
-  eventId?: string;
-  pickerActive: boolean;
-  continuousPicker: boolean;
-  areaPicker: boolean;
-}>();
-const emit = defineEmits<{
-  scopes: [scopes: InspectionSelection[]]; locate: [selection: InspectionSelection];
-  pick: [mode: 'field' | 'area']; finishPicker: []; busy: [busy: boolean];
-  newAnalysis: []; clearEvent: [];
-}>();
-type SentEvidence = ReturnType<typeof sentEvidence>[number] & { selection?: InspectionSelection };
-interface AnswerRecord {
-  id: number;
-  context: number;
-  instanceId: string;
-  capturedAt: string;
-  scopes: string[];
-  question: string;
-  answer: string;
-  status: StreamResult['status'] | 'streaming';
-  error?: string | undefined;
-  evidence: SentEvidence[];
-  baseMessages: ChatMessage[];
-  service: { model: string; baseUrl: string };
-  requests: ReturnType<typeof aiRequestBody>[];
-  activeCitation: string;
-}
-type PreparedRequest = Pick<AnswerRecord, 'context' | 'instanceId' | 'capturedAt' | 'scopes' | 'question' | 'evidence' | 'service'> & { body: ReturnType<typeof aiRequestBody> };
-const preparedRequest = ref<PreparedRequest>();
-const preparing = ref(false);
-const previewOpen = ref(false);
-const includeFormattedDto = ref(false);
-const settings = ref({ ...defaultAiSettings });
-const evidence = ref<AiEvidence[]>([]);
-const question = ref('');
-const questionInput = ref<InstanceType<typeof window.HTMLTextAreaElement>>();
-type AiTab = 'conversation' | 'evidence' | 'settings';
-const activeTab = ref<AiTab>('conversation');
-const tabs: Array<{ key: AiTab; label: string }> = [
-  { key: 'conversation', label: '对话分析' },
-  { key: 'evidence', label: '分析范围与证据' },
-  { key: 'settings', label: '模型设置' },
-];
-const tabList = ref<InstanceType<typeof window.HTMLDivElement>>();
-const conversationScroll = ref<InstanceType<typeof window.HTMLDivElement>>();
-const followLatest = ref(true);
-const quickQuestions = [
-  { label: '解释配置', text: '解释所选配置、依赖字段的当前值及其作用。' },
-  { label: '分析字段状态', text: '分析所选字段的当前值和显示、编辑、必填状态，给出证据。' },
-  { label: '分析报错与过程', text: '分析当前记录的错误及过程，给出可能原因、缺失证据和验证步骤。' },
-];
-const error = ref('');
-const note = ref('');
-const busy = ref(false);
-const testing = ref(false);
-const contextVersion = ref(0);
-const answers = ref<AnswerRecord[]>([]);
-const followupAnchor = ref<number>();
-let previousOwner = '';
-let previousBasis = '';
-let previousEvent = '';
-const eventQuestion = '分析所选报错或过程，说明相关字段、原因、缺失证据及验证方法。';
-let sequence = 0;
-let controller: InstanceType<typeof window.AbortController> | undefined;
-let redact = createRedactor();
+const props = defineProps<{ workspace: AiWorkspace; active: boolean; refreshing: boolean; pickerActive: boolean; continuousPicker: boolean; areaPicker: boolean }>();
+const emit = defineEmits<{ pick: [mode: 'field' | 'area']; finishPicker: []; locate: [selection: InspectionSelection] }>();
+const workspace = props.workspace;
+const state = workspace.state;
+const session = computed(() => workspace.current);
+const snapshot = computed(() => session.value?.source.snapshot);
+const locked = computed(() => workspace.busy || props.refreshing || props.pickerActive || !session.value || !workspace.available(session.value));
+const ownRequest = computed(() => state.request?.sessionId === session.value?.id ? state.request : undefined);
+const draftLocked = computed(() => Boolean(ownRequest.value) || props.pickerActive || !session.value || !workspace.available(session.value));
+const preview = computed(() => session.value ? workspace.requestView(session.value) : undefined);
+const byteCount = computed(() => preview.value ? bytes(preview.value.body) : 0);
+const invalidScopes = computed(() => session.value ? scopeIssues(session.value.source.snapshot, session.value.scopes) : []);
+const valueSummary = computed(() => {
+  const values = session.value?.evidence.filter((item) => item.kind === 'value' && item.selection?.kind === 'field') ?? [];
+  const present = values.filter((item) => item.included && (item.value as { status?: string }).status === 'present').length;
+  const missingRuntime = values.filter((item) => !item.included || (item.value as { runtimeState?: { status?: string } }).runtimeState?.status === 'unavailable').length;
+  return values.length ? `当前值 ${present}/${values.length} 项齐全 · ${missingRuntime} 项运行态未采集或未选中` : '尚未选择字段当前值';
+});
+const largestEvidence = computed(() => (preview.value?.evidence ?? []).map((item) => ({ id: item.id, title: item.title, size: bytes(item.value) })).sort((a, b) => b.size - a.size).slice(0, 3));
+const hasScope = computed(() => Boolean(session.value?.scopes.length || session.value?.eventId));
 const groupLabels: Record<EvidenceGroup, string> = { context: '单据背景', selected: '所选字段与范围', dependencies: '关联依赖', diagnostics: '诊断', trace: '过程' };
-const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-const locked = computed(() => busy.value || preparing.value || props.refreshing || props.pickerActive);
-const modelConfigured = computed(() => Boolean(settings.value.baseUrl.trim() && settings.value.model.trim() && settings.value.key.trim()));
-const hasScope = computed(() => Boolean(props.scopes.length || props.eventId));
-const invalidScopes = computed(() => scopeIssues(props.snapshot, props.scopes));
-const selectedEvidence = computed(() => evidence.value.filter((item) => item.included));
 const groups = computed(() => (Object.keys(groupLabels) as EvidenceGroup[]).map((key) => {
-  const items = evidence.value.filter((item) => item.group === key);
+  const items = session.value?.evidence.filter((item) => item.group === key) ?? [];
   return { key, label: groupLabels[key], items, included: items.filter((item) => item.included).length };
 }).filter((group) => group.items.length));
-const sent = computed(() => sentEvidence(selectedEvidence.value, redact));
-const history = computed(() => recentHistory(answers.value.filter((answer) => answer.context === contextVersion.value
-  && answer.status === 'complete' && (followupAnchor.value === undefined || answer.id <= followupAnchor.value))
-  .map((answer) => ({ question: String(redact(answer.question)), answer: String(redact(answer.answer)) }))));
-const requestMessages = computed<ChatMessage[]>(() => [
-  { role: 'system', content: AI_SYSTEM_PROMPT },
-  ...history.value.messages,
-  { role: 'user', content: JSON.stringify({ capturedAt: props.snapshot.capturedAt,
-    scopes: props.scopes.map((scope) => scopeLabel(props.snapshot, scope)),
-    question: redact(question.value), evidence: sent.value }) },
-]);
-const requestBody = computed(() => aiRequestBody(settings.value, requestMessages.value));
-const byteCount = computed(() => bytes(requestBody.value));
-const preview = computed(() => JSON.stringify(preparedRequest.value?.body ?? requestBody.value, null, 2));
-const largestEvidence = computed(() => sent.value.map((item) => ({ title: item.title, size: bytes(item) })).sort((a, b) => b.size - a.size).slice(0, 3));
-const valueSummary = computed(() => {
-  const values = evidence.value.filter((item) => item.kind === 'value' && item.selection?.kind === 'field');
-  const missing = values.filter((item) => !item.included || (item.value as { status?: string }).status !== 'present').length;
-  const runtimeMissing = values.filter((item) => !item.included || (item.value as { runtimeState?: { status?: string } }).runtimeState?.status === 'unavailable').length;
-  return values.length ? `当前值 ${values.length - missing}/${values.length} 项齐全 · ${runtimeMissing} 项运行态未采集或未选中` : '尚未选择字段当前值';
+const questionInput = ref<InstanceType<typeof window.HTMLTextAreaElement>>();
+const conversationScroll = ref<InstanceType<typeof window.HTMLDivElement>>();
+const tabList = ref<InstanceType<typeof window.HTMLDivElement>>();
+const drawer = ref<InstanceType<typeof window.HTMLElement>>();
+const drawerOpen = ref(false);
+const viewedAnswer = ref<AiAnswer>();
+const citationId = ref('');
+let drawerTrigger: InstanceType<typeof window.HTMLElement> | null = null;
+let restoringScroll = false;
+const quickQuestions = ['解释所选配置、依赖字段的当前值及其作用。', '分析所选字段的显示、编辑、必填状态，给出证据。', '分析当前报错与过程，给出可能原因、缺失证据和验证步骤。'];
+const drawerEvidence = computed(() => {
+  const items = viewedAnswer.value?.evidence ?? preview.value?.evidence ?? [];
+  return citationId.value ? items.filter((item) => item.id === citationId.value) : items;
 });
-
-function newContext() {
-  preparedRequest.value = undefined;
-  contextVersion.value += 1;
-  controller?.abort();
-  followupAnchor.value = undefined;
-  error.value = '';
-  note.value = '已开启新上下文，旧回答保留供查看。';
+const renamingId = ref(0);
+const renameDraft = ref('');
+const renameInput = ref<InstanceType<typeof window.HTMLInputElement>[]>();
+async function startRename(id: number) {
+  const item = state.sessions.find((entry) => entry.id === id);
+  if (!item || state.pickerSessionId) return;
+  renamingId.value = id; renameDraft.value = item.title;
+  await nextTick(); renameInput.value?.[0]?.focus(); renameInput.value?.[0]?.select();
 }
-function rebuildEvidence() {
-  const owner = JSON.stringify([props.snapshot.instanceId, props.snapshot.meta.projectCode, props.analysisId]);
-  const sameOwner = owner === previousOwner;
-  const evidenceIdentity = (item: AiEvidence) => JSON.stringify([item.path, item.kind, item.selection ? scopeIdentity(item.selection) : '']);
-  const prior = new Map((sameOwner ? evidence.value : []).map((item) => [evidenceIdentity(item), item]));
-  // 仅更新时间戳不打断追问；快照内容、范围或证据变化才隔离历史上下文。
-  const basis = JSON.stringify([owner, { ...props.snapshot, capturedAt: undefined }, props.scopes, props.eventId, props.trace?.stoppedAt, includeFormattedDto.value]);
-  if (basis !== previousBasis) newContext();
-  if (!sameOwner) { redact = createRedactor(); question.value = ''; }
-  const eventKey = props.eventId ? `${props.trace?.id ?? ''}:${props.eventId}` : '';
-  if (!eventKey && previousEvent && question.value === eventQuestion) question.value = '';
-  evidence.value = buildAiEvidence(props.snapshot, props.scopes, props.evaluations, props.trace, { includeFormattedDto: includeFormattedDto.value });
-  if (props.eventId && props.trace?.instanceId === props.snapshot.instanceId) {
-    const event = props.trace.events.find((item) => item.id === props.eventId);
-    if (event) {
-      const existing = evidence.value.find((item) => item.path === `trace.events.${event.id}`);
-      if (existing) { existing.value = event; existing.automatic = false; existing.title = `所选过程（完整输入输出） · ${event.method}`; }
-      else evidence.value.push({ id: `E${evidence.value.length + 1}`, title: `所选过程（完整输入输出） · ${event.method}`, path: `trace.events.${event.id}`, value: event, group: 'trace', kind: 'trace', automatic: false, included: true, original: false });
-    }
-    if (!sameOwner || eventKey !== previousEvent) question.value = eventQuestion;
-  }
-  for (const item of evidence.value) {
-    const previous = prior.get(evidenceIdentity(item));
-    if (previous) {
-      item.included = previous.included;
-      item.original = previous.original && JSON.stringify(previous.value) === JSON.stringify(item.value);
-    }
-  }
-  previousOwner = owner;
-  previousBasis = basis;
-  previousEvent = eventKey;
+function finishRename() {
+  workspace.rename(renamingId.value, renameDraft.value); renamingId.value = 0;
 }
-watch(() => props.analysisId, () => { includeFormattedDto.value = false; }, { flush: 'sync' });
-watch(() => [props.snapshot, props.scopes, props.eventId, props.trace?.stoppedAt, props.analysisId, includeFormattedDto.value], rebuildEvidence, { immediate: true });
-watch(() => [settings.value.baseUrl, settings.value.model], newContext);
-watch(() => busy.value || preparing.value, (value) => emit('busy', value), { flush: 'sync' });
-watch(() => [requestBody.value, settings.value.baseUrl, settings.value.key, props.analysisId], () => { preparedRequest.value = undefined; }, { flush: 'sync' });
-
-function showConversation() {
-  void selectTab('conversation');
+function renameKeydown(event: InstanceType<typeof window.KeyboardEvent>) {
+  if (event.isComposing) return;
+  if (event.key === 'Enter') { event.preventDefault(); finishRename(); }
+  if (event.key === 'Escape') { event.preventDefault(); renamingId.value = 0; }
 }
-defineExpose({ showConversation });
-
-async function selectTab(tab: AiTab) {
-  activeTab.value = tab;
-  await nextTick();
-  tabList.value?.querySelectorAll('button')[tabs.findIndex((item) => item.key === tab)]?.focus();
-}
-
-async function changeTabWithKeyboard(event: InstanceType<typeof window.KeyboardEvent>, index: number) {
-  const offsets: Record<string, number> = { ArrowRight: 1, ArrowLeft: -1, Home: -index, End: tabs.length - 1 - index };
-  const offset = offsets[event.key];
-  if (offset === undefined) return;
-  event.preventDefault();
-  const nextIndex = (index + offset + tabs.length) % tabs.length;
-  activeTab.value = tabs[nextIndex]!.key;
-  await nextTick();
-  tabList.value?.querySelectorAll('button')[nextIndex]?.focus();
-}
-
-function trackConversationScroll() {
-  const element = conversationScroll.value;
-  if (!props.active || activeTab.value !== 'conversation' || !element?.clientHeight) return;
-  followLatest.value = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
-}
-
-async function scrollToLatest() {
-  await nextTick();
-  const element = conversationScroll.value;
-  if (props.active && activeTab.value === 'conversation' && followLatest.value && element) {
-    element.scrollTop = element.scrollHeight;
-  }
-}
-
-function jumpToLatest() {
-  followLatest.value = true;
-  void scrollToLatest();
-}
-
-// 只在读者停留于底部时跟随流式输出，切换页签后沿用原来的阅读位置。
-watch(() => [answers.value.length, answers.value.find((answer) => answer.status === 'streaming')?.answer, busy.value, activeTab.value, props.active], scrollToLatest);
-
-async function useQuickQuestion(text: string) {
-  if (locked.value) return;
-  question.value = text;
-  showConversation();
-  await nextTick();
-  questionInput.value?.focus();
-}
-
+const modelPreset = computed({
+  get: () => ['deepseek-v4-flash', 'deepseek-v4-pro'].includes(state.settings.model) ? state.settings.model : 'custom',
+  set: (value: string) => { if (value !== 'custom') state.settings.model = value; else state.settings.model = ''; },
+});
+function setScopes(scopes: InspectionSelection[]) { if (session.value) workspace.setScopes(session.value, scopes); }
 function toggleGroup(key: EvidenceGroup) {
-  if (locked.value) return;
-  const items = evidence.value.filter((item) => item.group === key);
+  if (locked.value || !session.value) return;
+  const items = session.value.evidence.filter((item) => item.group === key);
   const included = !items.every((item) => item.included);
-  items.forEach((item) => { item.included = included; });
-  newContext();
+  items.forEach((item) => { item.included = included; }); workspace.changeEvidence(session.value);
 }
 function restoreEvidence() {
-  evidence.value.forEach((item) => { item.included = true; item.original = false; });
-  newContext();
+  if (locked.value || !session.value) return;
+  session.value.evidence.forEach((item) => { item.included = true; item.original = false; }); workspace.changeEvidence(session.value);
 }
-async function refreshEvidence() {
-  if (locked.value) return false;
-  preparing.value = true;
-  preparedRequest.value = undefined;
-  error.value = '';
-  try {
-    await props.refreshSnapshot();
-    await nextTick();
-    note.value = '已刷新快照。请核对当前字段值与采集时间；实际数据变化后，旧回答不加入本次请求。';
-    return true;
-  } catch (reason) {
-    error.value = `刷新失败，未发送 AI 请求：${reason instanceof Error ? reason.message : String(reason)}`;
-    return false;
-  } finally { preparing.value = false; }
+function trackScroll() {
+  if (restoringScroll || !session.value || !conversationScroll.value || state.tab !== 'conversation') return;
+  const element = conversationScroll.value;
+  session.value.scrollTop = element.scrollTop;
+  session.value.followLatest = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
 }
-
-async function prepareRequest() {
-  if (locked.value || !hasScope.value || !question.value.trim()) return;
-  if (!await refreshEvidence()) return;
-  if (invalidScopes.value.length) { error.value = invalidScopes.value.join('；'); void selectTab('evidence'); return; }
-  if (props.eventId && !props.trace?.events.some((event) => event.id === props.eventId && props.trace?.instanceId === props.snapshot.instanceId)) {
-    error.value = '所选过程已失效，请移除或重新选择过程'; return;
-  }
-  if (!modelConfigured.value || !hasScope.value || !selectedEvidence.value.length) { error.value = '请配置模型并选择范围和证据'; return; }
-  if (byteCount.value > REQUEST_LIMIT) { error.value = '请求超过 150 KB，请缩小范围后重新预览'; void selectTab('evidence'); return; }
-  preparedRequest.value = {
-    body: clone(requestBody.value), context: contextVersion.value, instanceId: props.snapshot.instanceId,
-    capturedAt: props.snapshot.capturedAt, scopes: props.scopes.map((scope) => scopeLabel(props.snapshot, scope)),
-    question: String(redact(question.value)), service: { model: settings.value.model, baseUrl: settings.value.baseUrl },
-    evidence: clone(sent.value.map((item, index) => ({ ...item, ...(selectedEvidence.value[index]?.selection ? { selection: selectedEvidence.value[index]!.selection! } : {}) }))),
-  };
-  previewOpen.value = true;
-  note.value = '已刷新并冻结本次请求，请查看发送预览后点击“确认发送”。修改问题、范围或设置后需重新预览。';
+async function jumpLatest() {
+  if (!session.value) return;
+  session.value.followLatest = true;
+  await nextTick();
+  if (conversationScroll.value) conversationScroll.value.scrollTop = conversationScroll.value.scrollHeight;
 }
-
-function syncPreviewOpen(event: InstanceType<typeof window.Event>) {
-  if (event.currentTarget instanceof window.HTMLDetailsElement) previewOpen.value = event.currentTarget.open;
-}
-async function save() {
-  error.value = '';
-  try { await saveAiSettings(settings.value); note.value = settings.value.remember ? '设置已保存在本机扩展存储，可清除 Key。' : '设置已保存，Key 仅保留在当前浏览器会话。'; }
-  catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
-}
-async function test() {
-  testing.value = true; error.value = '';
-  try { await testAiConnection(settings.value); note.value = '连接及模型调用成功。'; }
-  catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason); }
-  finally { testing.value = false; }
-}
-async function generate(answer: AnswerRecord, messages: ChatMessage[]) {
-  const currentSettings = { ...settings.value, ...answer.service };
-  const body = clone(aiRequestBody(currentSettings, messages));
-  if (bytes(body) > REQUEST_LIMIT) { error.value = '请求超过 150 KB，无法继续发送。请缩小范围后开始新分析。'; return; }
-  answer.requests.push(body);
-  answer.status = 'streaming'; answer.error = undefined;
-  controller = new window.AbortController(); busy.value = true;
-  try {
-    const result = await streamAnswer(currentSettings, body.messages, controller.signal, (text) => { answer.answer += text; });
-    answer.status = result.status; answer.error = result.error;
-  } catch (reason) {
-    answer.status = 'error'; answer.error = reason instanceof Error ? reason.message : String(reason);
-  } finally { busy.value = false; controller = undefined; }
-}
-async function send() {
-  if (locked.value || !preparedRequest.value) return;
-  error.value = '';
-  const prepared = preparedRequest.value;
-  const messages = clone(prepared.body.messages);
-  answers.value.push({ id: ++sequence, context: prepared.context, instanceId: prepared.instanceId,
-    capturedAt: prepared.capturedAt, scopes: prepared.scopes, question: prepared.question, answer: '', status: 'streaming', evidence: prepared.evidence,
-    baseMessages: messages, service: prepared.service, requests: [], activeCitation: '' });
-  preparedRequest.value = undefined;
-  previewOpen.value = false;
-  followupAnchor.value = undefined;
-  jumpToLatest();
-  await generate(answers.value[answers.value.length - 1]!, messages);
-}
-async function continueAnswer(answer: AnswerRecord) {
-  if (locked.value || answer.context !== contextVersion.value || answer.status !== 'length') return;
-  await generate(answer, [...clone(answer.baseMessages), { role: 'assistant', content: answer.answer },
-    { role: 'user', content: '上一次回答因输出上限中断。请从断点继续，不重复已有内容，继续使用原证据编号；尽快完成结论和建议。' }]);
-}
-async function followup(answer: AnswerRecord, detailed = false) {
-  followupAnchor.value = answer.id;
-  question.value = detailed ? `请详细分析“${answer.question}”，展开原因、证据和验证步骤，避免重复无关配置。` : '';
-  await nextTick(); questionInput.value?.focus();
-}
-async function copyAnswer(answer: AnswerRecord) {
-  try { await window.navigator.clipboard.writeText(answer.answer); note.value = '回答已复制。'; }
-  catch { error.value = '复制失败，请手动选择回答文本复制。'; }
-}
-function invalidCitations(answer: AnswerRecord) {
-  return [...new Set([...answer.answer.matchAll(/\[(E\d+)\]/g)].map((match) => match[1]!))]
-    .filter((id) => !answer.evidence.some((item) => item.id === id));
-}
-function selectCitation(answer: AnswerRecord, id: string) {
-  answer.activeCitation = id;
-}
-function statusText(answer: AnswerRecord) {
-  return { streaming: '生成中…', complete: '回答完成', length: '已达到输出上限，内容已保留，可继续生成', stopped: '已停止生成，内容已保留', error: '生成中断，内容已保留' }[answer.status];
-}
-onMounted(async () => {
-  try { settings.value = await loadAiSettings(); }
-  catch { error.value = '无法读取 AI 设置，请重新填写'; }
+watch(() => [state.activeId, state.tab, props.active], async () => {
+  drawerOpen.value = false; viewedAnswer.value = undefined;
+  restoringScroll = true;
+  await nextTick();
+  if (conversationScroll.value && session.value && props.active && state.tab === 'conversation') conversationScroll.value.scrollTop = session.value.scrollTop;
+  restoringScroll = false;
 });
-onBeforeUnmount(() => { controller?.abort(); emit('busy', false); });
+watch(() => [session.value?.answers.length, session.value?.answers.at(-1)?.answer], async () => {
+  if (props.active && state.tab === 'conversation' && session.value?.followLatest) await jumpLatest();
+});
+async function openPreview(answer?: AiAnswer, citation = '') {
+  drawerTrigger = document.activeElement instanceof window.HTMLElement ? document.activeElement : null;
+  viewedAnswer.value = answer; citationId.value = citation; drawerOpen.value = true;
+  await nextTick(); drawer.value?.focus();
+}
+function closePreview() { drawerOpen.value = false; drawerTrigger?.focus(); }
+function drawerKeydown(event: InstanceType<typeof window.KeyboardEvent>) {
+  if (event.key === 'Escape') { event.preventDefault(); closePreview(); return; }
+  if (event.key !== 'Tab') return;
+  const items = Array.from(drawer.value?.querySelectorAll<InstanceType<typeof window.HTMLElement>>('button:not(:disabled), summary, [tabindex="0"]') ?? [])
+    .filter((element) => element.getClientRects().length);
+  const first = items[0]; const last = items[items.length - 1];
+  if (event.shiftKey && (document.activeElement === first || document.activeElement === drawer.value)) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+}
+function send() { if (session.value && !locked.value) { drawerOpen.value = false; void workspace.send(session.value); } }
+function questionKeydown(event: InstanceType<typeof window.KeyboardEvent>) {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); send(); }
+}
+async function tabKeydown(event: InstanceType<typeof window.KeyboardEvent>, index: number) {
+  if (event.key === 'F2') { event.preventDefault(); await startRename(state.sessions[index]!.id); return; }
+  const offsets: Record<string, number> = { ArrowRight: 1, ArrowLeft: -1, Home: -index, End: state.sessions.length - 1 - index };
+  if (offsets[event.key] === undefined || state.pickerSessionId) return;
+  event.preventDefault();
+  const next = (index + offsets[event.key]! + state.sessions.length) % state.sessions.length;
+  workspace.select(state.sessions[next]!.id);
+  await nextTick(); tabList.value?.querySelectorAll<InstanceType<typeof window.HTMLElement>>('[role="tab"]')[next]?.focus();
+}
+async function copyAnswer(answer: AiAnswer) {
+  const owner = session.value;
+  if (!owner) return;
+  owner.note = '';
+  try { await window.navigator.clipboard.writeText(answer.answer); owner.note = '回答已复制'; }
+  catch { owner.error = '复制失败，请手动选择回答文本'; }
+}
+function invalidCitations(answer: AiAnswer) {
+  return [...new Set([...answer.answer.matchAll(/\[(E\d+)\]/g)].map((match) => match[1]!))].filter((id) => !answer.evidence.some((item) => item.id === id));
+}
+function statusText(answer: AiAnswer) {
+  return { streaming: '生成中…', complete: '', length: '已达到输出上限，可继续生成', stopped: '已停止，内容已保留', error: '生成失败，内容已保留' }[answer.status];
+}
 </script>
 
 <template>
   <section class="ai-panel">
     <header class="ai-header">
       <div class="ai-heading">
-        <div>
-          <h2>AI 分析</h2>
-          <p class="muted">
-            结合字段、配置与过程证据，定位单据问题。
-          </p>
+        <h2>AI 分析</h2>
+        <div class="ai-heading-summary">
+          <button @click="state.tab = 'settings'">
+            模型 {{ state.settings.model || '待配置' }}
+          </button>
+          <button @click="state.tab = 'evidence'">
+            范围 {{ session?.scopes.length || 0 }} 项
+          </button>
+          <span class="ai-captured-time">采集 {{ formatLocalDateTime(snapshot?.capturedAt) }}</span>
         </div>
-        <span v-if="busy || preparing" class="ai-live-status" role="status">{{ preparing ? '正在刷新证据…' : '正在生成回答…' }}</span>
       </div>
-      <div ref="tabList" class="ai-tabs" role="tablist" aria-label="AI 分析功能">
-        <button
-          v-for="(tab, index) in tabs"
-          :id="`ai-tab-${tab.key}`"
-          :key="tab.key"
-          role="tab"
-          :aria-selected="activeTab === tab.key"
-          :aria-controls="`ai-view-${tab.key}`"
-          :tabindex="activeTab === tab.key ? 0 : -1"
-          :class="{ active: activeTab === tab.key }"
-          @click="activeTab = tab.key"
-          @keydown="changeTabWithKeyboard($event, index)"
-        >
-          {{ tab.label }}
-        </button>
+      <div class="ai-navigation">
+        <div ref="tabList" class="ai-session-tabs" role="tablist" aria-label="分析会话">
+          <div v-for="(item, index) in state.sessions" :key="item.id" class="ai-session-tab" :class="{ active: state.activeId === item.id && state.tab === 'conversation' }">
+            <button :id="`ai-session-${item.id}`" role="tab" :aria-selected="state.activeId === item.id && state.tab === 'conversation'" aria-controls="ai-conversation" :tabindex="state.activeId === item.id ? 0 : -1" :title="`${item.title}（双击或 F2 重命名）`" :disabled="pickerActive" @click="workspace.select(item.id)" @dblclick="startRename(item.id)" @keydown="tabKeydown($event, index)">
+              {{ item.title }}<small v-if="state.request?.sessionId === item.id"> · 生成中</small>
+            </button>
+            <input v-if="renamingId === item.id" ref="renameInput" v-model="renameDraft" class="ai-rename-input" aria-label="会话名称" maxlength="60" @keydown="renameKeydown" @blur="finishRename">
+            <button v-else :disabled="pickerActive" :aria-label="`重命名 ${item.title}`" title="重命名会话" @click="startRename(item.id)">
+              ✎
+            </button>
+            <button :disabled="pickerActive || (workspace.busy && !state.request)" :aria-label="`关闭 ${item.title}`" @click="workspace.close(item.id)">
+              ×
+            </button>
+          </div>
+          <button class="ai-new-session" :disabled="workspace.busy || refreshing || pickerActive || !state.source" aria-label="新会话" title="新会话" @click="workspace.create()">
+            ＋
+          </button>
+        </div>
+        <div class="ai-function-tabs">
+          <button :class="{ active: state.tab === 'history' }" @click="state.tab = 'history'">
+            问答历史
+          </button>
+          <button :class="{ active: state.tab === 'evidence' }" @click="state.tab = 'evidence'">
+            <span class="ai-wide-label">分析</span>范围与证据
+          </button>
+          <button :class="{ active: state.tab === 'settings' }" @click="state.tab = 'settings'">
+            模型<span class="ai-wide-label">设置</span>
+          </button>
+        </div>
       </div>
     </header>
-
-    <div class="ai-snapshot-bar">
-      <span>快照采集于 <strong>{{ snapshot.capturedAt }}</strong></span>
-      <button :disabled="locked" @click="refreshEvidence">
-        {{ preparing ? '刷新中…' : '刷新并核对证据' }}
+    <DismissibleNotice v-if="state.closed" :notice-key="state.closed.session.id" class="ai-undo" @close="state.closed = undefined">
+      已关闭“{{ state.closed.session.title }}” <button :disabled="pickerActive" @click="workspace.undoClose()">
+        撤销关闭
+      </button>
+    </DismissibleNotice>
+    <DismissibleNotice v-if="session && !workspace.available(session)" :notice-key="session.id" class="ai-offline">
+      此会话仅供阅读，请切回对应单据并刷新快照；草稿身份无法确认时请新建会话。
+    </DismissibleNotice>
+    <DismissibleNotice v-if="state.historyError" :notice-key="state.historyError" class="error-banner" role="alert" @close="state.historyError = ''">
+      {{ state.historyError }} <button v-if="workspace.historyUnsaved" :disabled="Boolean(state.historySaving)" @click="workspace.retryHistory()">
+        重试保存
+      </button>
+      <button :disabled="!state.historyReady || Boolean(state.historySaving)" @click="workspace.reloadHistory()">
+        重新读取
+      </button>
+    </DismissibleNotice>
+    <div v-if="!session && state.tab !== 'settings' && state.tab !== 'history'" class="ai-empty">
+      <p>请先在 BOE 页面刷新快照，再开始分析。</p><button @click="state.tab = 'settings'">
+        模型设置
       </button>
     </div>
-
-    <div v-if="note || error" class="ai-notices">
-      <p v-if="note" class="muted" role="status">
-        {{ note }}
-      </p>
-      <p v-if="error" class="error-banner" role="alert">
-        {{ error }}
-      </p>
-    </div>
-
-    <div v-show="activeTab === 'conversation'" id="ai-view-conversation" class="ai-conversation" role="tabpanel" aria-labelledby="ai-tab-conversation" tabindex="0">
-      <div class="ai-context-bar">
-        <button class="ai-context-model" @click="selectTab('settings')">
-          <span>模型</span><strong>{{ settings.model || '待配置' }}</strong>
-          <small v-if="!modelConfigured">未配置完成</small>
-        </button>
-        <button @click="selectTab('evidence')">
-          <span>分析范围</span><strong>{{ scopes.length }} 项{{ eventId ? ' · 已选过程' : '' }}</strong>
-        </button>
-        <button @click="selectTab('evidence')">
-          <span>发送证据</span><strong>{{ selectedEvidence.length }} 项</strong>
-          <small>{{ (byteCount / 1000).toFixed(1) }} / 150 KB</small>
-        </button>
-      </div>
-
-      <div ref="conversationScroll" class="ai-conversation-scroll" @scroll="trackConversationScroll">
-        <div v-if="!answers.length" class="ai-welcome">
-          <span class="ai-welcome-mark" aria-hidden="true">AI</span>
-          <h3>从一个具体问题开始</h3>
-          <p class="muted">
-            选择需要排查的字段或区域，描述现象或粘贴报错。<br>回答将结合所选证据，给出原因与验证建议。
-          </p>
-          <div class="ai-starters">
-            <button v-for="item in quickQuestions" :key="item.label" :disabled="locked" @click="useQuickQuestion(item.text)">
-              {{ item.label }}<span aria-hidden="true">↗</span>
-            </button>
-          </div>
-          <div class="tool-actions ai-welcome-actions">
-            <button v-if="!hasScope" class="ai-primary" @click="selectTab('evidence')">
-              选择分析范围
-            </button>
-            <button v-if="!modelConfigured" @click="selectTab('settings')">
-              配置模型
-            </button>
-          </div>
-        </div>
-        <article v-for="answer in answers" :key="answer.id" class="ai-answer">
-          <div class="ai-question">
-            <span class="ai-message-label">你</span>
-            <p>{{ answer.question }}</p>
-          </div>
-          <div class="ai-response">
-            <span class="ai-message-label">AI 分析</span>
-            <p class="muted">
-              {{ answer.scopes.join('；') }} · {{ answer.capturedAt }} · {{ answer.service.model }}
-            </p>
-            <p class="muted">
-              {{ statusText(answer) }}{{ answer.context !== contextVersion ? ' · 来自先前上下文' : '' }}
-            </p>
-            <p v-if="answer.error" class="error-banner">
-              {{ answer.error }}
-            </p>
-            <AiMarkdown :text="answer.answer" @cite="selectCitation(answer, $event)" />
-            <p v-if="invalidCitations(answer).length" class="warnings">
-              以下引用不存在于本次发送证据中：{{ invalidCitations(answer).join('、') }}。相关结论需要核对。
-            </p>
-            <div class="tool-actions">
-              <button v-if="answer.status === 'length'" :disabled="locked || answer.context !== contextVersion" @click="continueAnswer(answer)">
-                继续生成
-              </button>
-              <button :disabled="locked || answer.context !== contextVersion || answer.status !== 'complete'" @click="followup(answer)">
-                继续追问
-              </button>
-              <button :disabled="locked || answer.context !== contextVersion || answer.status !== 'complete'" @click="followup(answer, true)">
-                详细分析
-              </button>
-              <button :disabled="!answer.answer" @click="copyAnswer(answer)">
-                复制回答
-              </button>
-            </div>
-            <div v-if="answer.activeCitation" class="ai-citation-detail">
-              <template v-for="citation in answer.evidence.filter((item) => item.id === answer.activeCitation)" :key="citation.id">
-                <strong>[{{ citation.id }}] {{ citation.title }}</strong>
-                <button v-if="citation.selection" :disabled="busy || pickerActive || answer.instanceId !== snapshot.instanceId" @click="emit('locate', citation.selection)">
-                  定位字段或区域
-                </button>
-                <p class="muted">
-                  {{ citation.path }} · 本次实际发送内容
-                </p>
-                <pre>{{ JSON.stringify(citation.value, null, 2) }}</pre>
-              </template>
-              <p v-if="!answer.evidence.some((item) => item.id === answer.activeCitation)" class="warnings">
-                该引用未包含在本次发送证据中。
-              </p>
-            </div>
-            <details><summary>查看本次请求与证据</summary><pre class="ai-preview">{{ JSON.stringify(answer.requests, null, 2) }}</pre></details>
-          </div>
-        </article>
-      </div>
-
-      <div class="ai-composer">
-        <button v-if="answers.length && !followLatest" class="ai-jump-latest" @click="jumpToLatest">
-          回到最新回答 ↓
-        </button>
-        <div v-if="answers.length" class="tool-actions ai-quick-questions">
-          <button v-for="item in quickQuestions" :key="item.label" :disabled="locked" @click="useQuickQuestion(item.text)">
-            {{ item.label }}
+    <div v-if="session" v-show="state.tab === 'conversation'" id="ai-conversation" class="ai-conversation" role="tabpanel" :aria-labelledby="`ai-session-${session.id}`">
+      <div ref="conversationScroll" class="ai-conversation-scroll" @scroll="trackScroll">
+        <div v-if="!session.answers.length" class="ai-welcome">
+          <button class="ai-welcome-link" @click="state.tab = 'evidence'">
+            选择相关字段或区域，从一个具体问题开始。
           </button>
+          <div class="ai-starters">
+            <button v-for="(text, index) in quickQuestions" :key="text" :disabled="draftLocked" @click="session.draft = text; session.collapsed = false">
+              {{ ['解释配置', '分析字段状态', '分析报错与过程'][index] }}
+            </button>
+          </div>
         </div>
-        <p v-if="followupAnchor" class="muted">
-          正在追问第 {{ followupAnchor }} 次分析。
-        </p>
-        <div v-if="pickerActive" class="ai-composer-hint">
-          <span>正在从页面选择分析范围</span>
-          <button @click="emit('finishPicker')">
+        <template v-for="(answer, index) in session.answers" :key="answer.id">
+          <p v-if="index > 0 && answer.context !== session.answers[index - 1]?.context" class="ai-context-divider">
+            分析条件已更新
+          </p>
+          <article class="ai-answer">
+            <div class="ai-question">
+              <span class="ai-message-label">你 · {{ formatLocalDateTime(answer.sentAt) }}</span><p>{{ answer.question }}</p>
+            </div>
+            <div class="ai-response">
+              <AiMarkdown :text="answer.answer" @cite="openPreview(answer, $event)" />
+              <DismissibleNotice v-if="statusText(answer)" :notice-key="`${session.id}:${answer.id}:${answer.status}`" class="muted">
+                {{ statusText(answer) }}
+              </DismissibleNotice>
+              <DismissibleNotice v-if="answer.error" :notice-key="answer.error" class="error-banner" role="alert" @close="answer.error = ''">
+                {{ answer.error }}
+              </DismissibleNotice>
+              <DismissibleNotice v-if="invalidCitations(answer).length" :notice-key="`${session.id}:${answer.id}:${invalidCitations(answer).join()}`" class="warnings">
+                引用不存在于本次发送证据：{{ invalidCitations(answer).join('、') }}，请核对相关结论。
+              </DismissibleNotice>
+              <div class="tool-actions">
+                <button :disabled="!answer.answer" @click="copyAnswer(answer)">
+                  复制回答
+                </button>
+                <button @click="openPreview(answer)">
+                  查看依据
+                </button>
+                <button v-if="answer.status === 'length'" :disabled="locked || session.conditionsChanged || answer.context !== session.context" @click="workspace.continueAnswer(session, answer)">
+                  继续生成
+                </button>
+                <button v-if="answer.status === 'error' || answer.status === 'stopped'" :disabled="draftLocked" @click="session.draft = answer.question; session.collapsed = false">
+                  恢复问题
+                </button>
+              </div>
+            </div>
+          </article>
+        </template>
+      </div>
+      <div class="ai-composer">
+        <button v-if="session.answers.length && !session.followLatest" class="ai-jump-latest" @click="jumpLatest">
+          回到最新 ↓
+        </button>
+        <DismissibleNotice v-if="session.error" :notice-key="`${session.id}:${session.error}`" class="error-banner" role="alert" @close="session.error = ''">
+          {{ session.error }} <button @click="state.tab = 'evidence'">
+            调整范围
+          </button>
+        </DismissibleNotice>
+        <DismissibleNotice v-if="session.note" :notice-key="`${session.id}:${session.note}`" :auto-close-ms="3000" :active="active && state.tab === 'conversation'" class="muted" @close="session.note = ''">
+          {{ session.note }}
+        </DismissibleNotice>
+        <DismissibleNotice v-if="pickerActive" :notice-key="session.id" class="ai-composer-hint">
+          正在选择范围 <button @click="emit('finishPicker')">
             完成选择
           </button>
-        </div>
-        <div v-if="!modelConfigured || !hasScope || !selectedEvidence.length || byteCount > REQUEST_LIMIT" class="ai-composer-hint">
-          <button v-if="!modelConfigured" @click="selectTab('settings')">
+        </DismissibleNotice>
+        <DismissibleNotice v-if="!workspace.configured || !hasScope" :notice-key="`${session.id}:${workspace.configured}:${hasScope}`" class="ai-composer-hint">
+          <button v-if="!workspace.configured" @click="state.tab = 'settings'">
             请先配置模型
           </button>
-          <button v-if="!hasScope || !selectedEvidence.length" @click="selectTab('evidence')">
-            请选择分析范围与证据
+          <button v-if="!hasScope" @click="state.tab = 'evidence'">
+            选择分析范围与证据
           </button>
-          <button v-if="byteCount > REQUEST_LIMIT" class="ai-over-limit" @click="selectTab('evidence')">
-            请求超过 150 KB，调整证据
-          </button>
-        </div>
-        <label class="ai-input-label" for="ai-question">描述问题</label>
-        <textarea id="ai-question" ref="questionInput" v-model="question" :disabled="locked" rows="3" placeholder="描述问题或粘贴报错；可继续追问，或请 AI 展开分析。" />
+        </DismissibleNotice>
+        <button class="ai-collapse-input" @click="session.collapsed = !session.collapsed">
+          {{ session.collapsed ? '展开输入区，继续提问' : '收起输入区' }}
+        </button>
+        <textarea v-show="!session.collapsed" ref="questionInput" v-model="session.draft" :disabled="draftLocked" rows="2" aria-label="描述问题" placeholder="描述问题或继续追问；Ctrl / ⌘ + Enter 发送" @keydown="questionKeydown" />
         <div class="ai-composer-footer">
-          <details class="ai-request-preview" :open="previewOpen" @toggle="syncPreviewOpen">
-            <summary>{{ preparedRequest ? '待确认的发送预览' : '当前证据预览' }} · {{ (byteCount / 1000).toFixed(1) }} KB</summary>
-            <div class="ai-preview-popover">
-              <strong>{{ preparedRequest ? '本次请求已冻结，确认后发送以下内容' : '发送前将刷新快照并重新生成预览' }}</strong>
-              <p class="muted">
-                {{ settings.baseUrl }} · {{ snapshot.capturedAt }}
-              </p>
-              <p class="muted">
-                默认脱敏，凭据始终移除。请确认本次发送内容。
-              </p>
-              <p v-if="history.omitted" class="muted">
-                本次省略 {{ history.omitted }} 轮较早回答；最多携带最近两轮，历史预算 16 KB。
-              </p>
-              <pre class="ai-preview">{{ preview }}</pre>
-            </div>
-          </details>
-          <div class="tool-actions">
-            <button :disabled="locked" @click="emit('newAnalysis')">
-              新建分析
-            </button>
-            <button v-if="busy" class="ai-stop" @click="controller?.abort()">
-              停止生成
-            </button>
-            <button v-else-if="preparedRequest" class="ai-primary" :disabled="locked" @click="send">
-              确认发送
-            </button>
-            <button v-else class="ai-primary" :disabled="locked || !modelConfigured || !hasScope || !question.trim()" @click="prepareRequest">
-              {{ preparing ? '刷新中…' : '刷新并预览' }}
-            </button>
-          </div>
+          <button :disabled="!preview" @click="openPreview()">
+            查看发送内容
+          </button>
+          <small class="muted">{{ workspace.historyDisabled(session) ? '此会话历史已删除，后续不再保存' : state.historySaving ? '正在保存问答…' : workspace.historyUnsaved ? '问答尚未保存，可在历史页重试' : '问答自动保存到本机' }}</small>
+          <span v-if="ownRequest?.phase === 'preparing'" role="status">准备中…</span>
+          <button v-if="ownRequest" class="ai-stop" @click="workspace.stop()">
+            {{ ownRequest.phase === 'preparing' ? '取消准备' : '停止生成' }}
+          </button>
+          <button v-else class="ai-primary" :disabled="locked || !workspace.configured || !hasScope || !session.draft.trim()" @click="send">
+            {{ state.request ? '另一会话正在生成' : '发送' }}
+          </button>
         </div>
       </div>
     </div>
 
-    <div v-show="activeTab === 'evidence'" id="ai-view-evidence" class="ai-tab-page" role="tabpanel" aria-labelledby="ai-tab-evidence" tabindex="0">
-      <div class="ai-page-intro">
-        <h3>确定本次分析的范围与证据</h3>
-        <p class="muted">
-          只选择与问题相关的内容，可减少无关信息并节省请求空间。
-        </p>
+    <div v-show="state.tab !== 'conversation'" class="ai-page-shell">
+      <div class="ai-return-bar">
+        <button class="ai-primary" @click="state.tab = 'conversation'">
+          返回对话
+        </button>
       </div>
-      <div v-if="invalidScopes.length" class="warnings" role="alert">
-        <p v-for="issue in invalidScopes" :key="issue">
+      <div v-if="session && snapshot" v-show="state.tab === 'evidence'" class="ai-tab-page">
+        <h3>分析范围与证据</h3><p class="muted">
+          当前会话：{{ session.title }} · 采集 {{ formatLocalDateTime(snapshot.capturedAt) }}
+        </p>
+        <div class="tool-actions">
+          <button :disabled="locked" @click="workspace.refresh(session)">
+            刷新数据
+          </button><button v-if="ownRequest?.phase === 'preparing'" @click="workspace.stop()">
+            取消准备
+          </button>
+        </div>
+        <DismissibleNotice v-if="session.error" :notice-key="`${session.id}:${session.error}`" class="error-banner" role="alert" @close="session.error = ''">
+          {{ session.error }}
+        </DismissibleNotice>
+        <DismissibleNotice v-if="session.note" :notice-key="`${session.id}:${session.note}`" :auto-close-ms="3000" :active="active && state.tab === 'evidence'" class="muted" @close="session.note = ''">
+          {{ session.note }}
+        </DismissibleNotice>
+        <DismissibleNotice v-for="issue in invalidScopes" :key="`${session.id}:${issue}`" class="warnings">
           {{ issue }}
-        </p>
-      </div>
-      <div class="ai-send-summary">
-        <strong>{{ selectedEvidence.length }} 项证据 · {{ (byteCount / 1000).toFixed(1) }} KB / 150 KB</strong>
-        <p>{{ valueSummary }}</p>
-        <p class="muted">
-          自动补充 {{ selectedEvidence.filter((item) => item.automatic).length }} 项直接关联证据。默认脱敏，凭据始终移除。
-        </p>
-        <p v-if="history.omitted" class="muted">
-          本次省略 {{ history.omitted }} 轮较早回答；最多携带最近两轮，历史预算 16 KB。
-        </p>
-        <div class="tool-actions">
-          <button v-for="group in groups" :key="group.key" :disabled="locked" :aria-pressed="group.included === group.items.length" @click="toggleGroup(group.key)">
-            {{ group.label }} {{ group.included }}/{{ group.items.length }}
-          </button>
-          <button :disabled="locked" @click="restoreEvidence">
-            恢复推荐选择
-          </button>
-        </div>
-        <div v-if="byteCount > REQUEST_LIMIT" class="warnings">
-          请求超过上限，请缩小范围。占用最多的证据：
-          <p v-for="item in largestEvidence" :key="item.title">
-            {{ item.title }} · {{ (item.size / 1000).toFixed(1) }} KB
+        </DismissibleNotice>
+        <div class="ai-send-summary">
+          <strong>{{ preview?.evidence.length || 0 }} 项证据 · {{ (byteCount / 1000).toFixed(1) }} / 150 KB</strong>
+          <p>{{ valueSummary }}</p>
+          <p class="muted">
+            自动补充 {{ session.evidence.filter(item => item.automatic && item.included).length }} 项关联证据。默认脱敏，凭据始终移除。
           </p>
+          <DismissibleNotice v-if="byteCount > REQUEST_LIMIT" :notice-key="`${session.id}:${byteCount}`" class="warnings">
+            请求超过上限，请缩小范围。占用最多的证据：
+            <span v-for="item in largestEvidence" :key="item.id">{{ item.title }}（{{ (item.size / 1000).toFixed(1) }} KB） </span>
+          </DismissibleNotice>
+          <div class="tool-actions">
+            <button v-for="group in groups" :key="group.key" :disabled="locked" :aria-pressed="group.included === group.items.length" @click="toggleGroup(group.key)">
+              {{ group.label }} {{ group.included }}/{{ group.items.length }}
+            </button><button :disabled="locked" @click="restoreEvidence">
+              恢复推荐选择
+            </button>
+          </div>
         </div>
-      </div>
-      <section class="ai-card">
-        <h3>分析范围</h3>
-        <div class="tool-actions">
-          <button :disabled="locked" @click="emit('pick', 'field')">
-            从页面选字段
-          </button>
-          <button :disabled="locked || !areaPicker" @click="emit('pick', 'area')">
-            从页面选区域
-          </button>
-          <button v-if="pickerActive" @click="emit('finishPicker')">
-            完成选择
-          </button>
-          <button :disabled="locked || !scopes.length" @click="emit('scopes', [])">
-            清空范围
-          </button>
-        </div>
-        <p v-if="pickerActive" class="picker-tip">
-          {{ continuousPicker ? '在页面连续点击添加，点击“完成选择”或按 Esc 结束。' : '当前 Adapter 支持单次选择，点击字段后返回。' }}
-        </p>
-        <p v-else-if="!continuousPicker" class="muted">
-          当前 Adapter 使用单次选择；升级后支持连续点选。隐藏字段可通过下方搜索列表加入。
-        </p>
-        <p v-if="!hasScope" class="muted">
-          尚未选择范围，可从页面点选或手动加入。
-        </p>
-        <div v-if="eventId" class="tool-actions">
-          <span class="muted">已包含所选过程：{{ eventId }}</span>
-          <button :disabled="locked" @click="emit('clearEvent')">
-            移除过程
-          </button>
-        </div>
-        <div class="scope-list">
-          <span v-for="scope in scopes" :key="scopeIdentity(scope)" class="scope-chip" :title="scope.kind === 'bill' ? '整个单据' : scope.kind === 'field' ? `${scope.areaCode}.${scope.fieldCode}` : scope.areaCode">
-            {{ scopeLabel(snapshot, scope) }}
-            <button :disabled="locked" :aria-label="`移除 ${scopeLabel(snapshot, scope)}`" @click="emit('scopes', scopes.filter((item) => scopeIdentity(item) !== scopeIdentity(scope)))">×</button>
-          </span>
-        </div>
-        <AiScopeSelector :key="`${snapshot.instanceId}:${analysisId}`" :snapshot="snapshot" :scopes="scopes" :disabled="locked" @change="emit('scopes', $event)" />
-        <div class="tool-actions">
-          <button :disabled="locked" @click="emit('scopes', [{ kind: 'bill' }])">
+        <section class="ai-card">
+          <h3>选择范围</h3>
+          <div class="tool-actions">
+            <button :disabled="locked" @click="emit('pick', 'field')">
+              从页面选字段
+            </button><button :disabled="locked || !areaPicker" @click="emit('pick', 'area')">
+              从页面选区域
+            </button><button :disabled="locked" @click="setScopes([])">
+              清空范围
+            </button><button v-if="pickerActive" @click="emit('finishPicker')">
+              完成选择
+            </button>
+          </div>
+          <DismissibleNotice v-if="pickerActive" :notice-key="session.id" class="picker-tip">
+            {{ continuousPicker ? '连续点击添加，完成后点击“完成选择”。' : '选择一个字段后返回。' }}
+          </DismissibleNotice>
+          <p v-if="session.eventId">
+            已包含过程副本：{{ session.eventId }} <button :disabled="locked" @click="workspace.clearTrace(session)">
+              移除过程
+            </button>
+          </p>
+          <div class="scope-list">
+            <span v-for="scope in session.scopes" :key="scopeIdentity(scope)" class="scope-chip">{{ scopeLabel(snapshot, scope) }}<button :disabled="locked" :aria-label="`移除 ${scopeLabel(snapshot, scope)}`" @click="setScopes(session.scopes.filter(item => scopeIdentity(item) !== scopeIdentity(scope)))">×</button></span>
+          </div>
+          <AiScopeSelector :key="session.id" :snapshot="snapshot" :scopes="session.scopes" :disabled="locked" @change="setScopes" />
+          <button :disabled="locked" @click="setScopes([{ kind: 'bill' }])">
             选择整个单据
           </button>
-        </div>
-      </section>
-      <section class="ai-card">
-        <label class="ai-dto-option"><input v-model="includeFormattedDto" :disabled="locked" type="checkbox">包含格式化 DTO（用于提交数据分析，可能显著增加请求大小）</label>
-        <details>
-          <summary>高级证据设置 · 逐项调整和脱敏</summary>
-          <details v-for="group in groups" :key="group.key">
-            <summary>{{ group.label }} · {{ group.included }}/{{ group.items.length }}</summary>
-            <div v-for="item in group.items" :key="item.id" class="evidence-row">
-              <label><input v-model="item.included" :disabled="locked" type="checkbox" @change="newContext">[{{ item.id }}] {{ item.title }}</label>
-              <label><input v-model="item.original" :disabled="locked" type="checkbox" @change="newContext">保留原值</label>
-            </div>
+        </section>
+        <section class="ai-card">
+          <label class="ai-dto-option"><input :checked="session.includeFormattedDto" :disabled="locked" type="checkbox" @change="workspace.setDto(session, !session.includeFormattedDto)">包含格式化 DTO（可能显著增加请求大小）</label>
+          <details>
+            <summary>高级证据设置 · 逐项调整和脱敏</summary>
+            <details v-for="group in groups" :key="group.key">
+              <summary>{{ group.label }} · {{ group.included }}/{{ group.items.length }}</summary>
+              <div v-for="item in group.items" :key="item.id" class="evidence-row">
+                <label><input v-model="item.included" :disabled="locked" type="checkbox" @change="workspace.changeEvidence(session)">[{{ item.id }}] {{ item.title }}</label><label><input v-model="item.original" :disabled="locked" type="checkbox" @change="workspace.changeEvidence(session)">保留原值</label>
+              </div>
+            </details>
           </details>
-        </details>
-      </section>
-      <div class="ai-page-footer">
-        <span class="muted">调整范围或证据将开启新上下文，已有回答保留。</span>
-        <button class="ai-primary" @click="showConversation">
-          返回对话
-        </button>
+        </section>
+      </div>
+
+      <AiHistoryView v-if="state.tab === 'history'" :entries="state.history" :loading="!state.historyReady" :saving="Boolean(state.historySaving)" :unsaved="workspace.historyUnsaved" :deleting="state.historyDeleting" @delete="workspace.deleteHistory($event)" @refresh="workspace.reloadHistory()" @retry="workspace.retryHistory()" />
+      <div v-show="state.tab === 'settings'" class="ai-tab-page">
+        <h3>模型设置</h3><p class="muted">
+          兼容 OpenAI Chat Completions 接口。测试仅发送简短问题。
+        </p>
+        <section class="ai-card ai-model-card">
+          <div class="ai-settings">
+            <label>Base URL<input v-model="state.settings.baseUrl" :disabled="workspace.busy" placeholder="https://api.deepseek.com"></label>
+            <label>模型选择<select v-model="modelPreset" :disabled="workspace.busy"><option value="deepseek-v4-flash">DeepSeek V4 Flash · deepseek-v4-flash</option><option value="deepseek-v4-pro">DeepSeek V4 Pro · deepseek-v4-pro</option><option value="custom">自定义模型</option></select></label>
+            <label v-if="modelPreset === 'custom'">模型标识<input v-model="state.settings.model" :disabled="workspace.busy" placeholder="填写服务支持的 model 标识"></label>
+            <label>API Key<input v-model="state.settings.key" :disabled="workspace.busy" type="password" autocomplete="off"></label>
+            <label><input v-model="state.settings.remember" :disabled="workspace.busy" type="checkbox">记住本机 Key（扩展存储不提供加密保险库）</label>
+            <section class="ai-advanced-settings">
+              <h4>高级设置</h4><label>回答输出上限<input v-model.number="state.settings.maxTokens" :disabled="workspace.busy" type="number" min="128" max="65536" step="128"></label><p class="muted">
+                默认 4096；达到上限后可手动继续生成。实际支持范围取决于模型。
+              </p>
+            </section>
+            <div class="ai-settings-actions">
+              <button :disabled="workspace.busy" @click="workspace.save()">
+                保存设置
+              </button><div class="ai-test-action">
+                <button :disabled="workspace.busy" @click="workspace.test()">
+                  {{ state.test.status === 'testing' ? '测试中…' : '测试模型' }}
+                </button><DismissibleNotice v-if="state.test.status !== 'idle'" :auto-close-ms="state.test.status === 'success' ? 3000 : 0" :active="active && state.tab === 'settings'" :notice-key="`${state.test.status}:${state.test.message}`" class="ai-test-status" :class="`is-${state.test.status}`">
+                  {{ state.test.message }}
+                </DismissibleNotice>
+              </div><button :disabled="workspace.busy" @click="workspace.save(true)">
+                清除 Key
+              </button>
+            </div>
+            <DismissibleNotice v-if="state.settingsNote" :auto-close-ms="3000" :active="active && state.tab === 'settings'" :notice-key="state.settingsNote" class="muted" @close="state.settingsNote = ''">
+              {{ state.settingsNote }}
+            </DismissibleNotice><DismissibleNotice v-if="state.settingsError" :notice-key="state.settingsError" class="error-banner" role="alert" @close="state.settingsError = ''">
+              {{ state.settingsError }}
+            </DismissibleNotice>
+          </div>
+        </section>
       </div>
     </div>
 
-    <div v-show="activeTab === 'settings'" id="ai-view-settings" class="ai-tab-page" role="tabpanel" aria-labelledby="ai-tab-settings" tabindex="0">
-      <div class="ai-page-intro">
-        <h3>连接你的模型服务</h3>
-        <p class="muted">
-          支持兼容 OpenAI Chat Completions 的接口。测试连接仅发送简短测试问题。
-        </p>
-      </div>
-      <section class="ai-card ai-model-card">
-        <div class="ai-settings">
-          <label>Base URL<input v-model="settings.baseUrl" :disabled="busy" placeholder="https://api.deepseek.com"></label>
-          <label>模型<input v-model="settings.model" :disabled="busy" list="ai-models"></label>
-          <datalist id="ai-models">
-            <option value="deepseek-v4-flash" /><option value="deepseek-v4-pro" />
-          </datalist>
-          <label>API Key<input v-model="settings.key" :disabled="busy" type="password" autocomplete="off"></label>
-          <label><input v-model="settings.remember" :disabled="busy" type="checkbox">记住本机 Key（扩展存储不提供加密保险库）</label>
-          <details>
-            <summary>高级设置</summary>
-            <label>回答输出上限<input v-model.number="settings.maxTokens" :disabled="busy" type="number" min="128" max="65536" step="128"></label>
-            <p class="muted">
-              默认 4096；实际支持范围取决于模型。达到上限后可手动继续生成。
-            </p>
-          </details>
-          <div class="tool-actions">
-            <button :disabled="busy || testing" @click="save">
-              保存设置
-            </button>
-            <button :disabled="testing || busy" @click="test">
-              {{ testing ? '连接中…' : '测试模型（发送简短测试请求）' }}
-            </button>
-            <button :disabled="busy || testing" @click="settings.key = ''; save()">
-              清除 Key
-            </button>
-          </div>
+    <div v-if="drawerOpen" class="ai-drawer-backdrop" @click.self="closePreview">
+      <aside ref="drawer" class="ai-evidence-drawer" role="dialog" aria-modal="true" aria-labelledby="ai-drawer-title" tabindex="-1" @keydown="drawerKeydown">
+        <header>
+          <h3 id="ai-drawer-title">
+            {{ viewedAnswer ? '本次实际发送' : '查看发送内容' }}
+          </h3><button @click="closePreview">
+            关闭
+          </button>
+        </header>
+        <div class="ai-drawer-body">
+          <p v-if="!viewedAnswer" class="muted">
+            当前快照内容，发送时自动更新。
+          </p>
+          <p>模型：{{ viewedAnswer?.service.model || state.settings.model }}</p>
+          <p>采集时间：{{ formatLocalDateTime(viewedAnswer?.capturedAt || snapshot?.capturedAt) }}</p>
+          <p v-if="viewedAnswer">
+            发送时间：{{ formatLocalDateTime(viewedAnswer.sentAt) }}
+          </p>
+          <p>问题：{{ viewedAnswer?.question || preview?.question || '尚未填写' }}</p>
+          <p>范围：{{ (viewedAnswer?.scopes || preview?.scopes || []).join('；') || '所选过程' }}</p>
+          <p class="muted">
+            历史最多携带最近两轮，预算 16 KB；省略 {{ viewedAnswer?.omitted ?? preview?.omitted ?? 0 }} 轮。
+          </p>
+          <DismissibleNotice v-if="citationId && !drawerEvidence.length" :notice-key="citationId" class="warnings">
+            引用 {{ citationId }} 不在本次发送证据中。
+          </DismissibleNotice>
+          <button v-if="citationId" @click="citationId = ''">
+            查看全部依据
+          </button>
+          <AiEvidenceView :evidence="drawerEvidence" :can-locate="!locked" :requests="viewedAnswer?.requests || preview?.body" @locate="emit('locate', $event)" />
         </div>
-      </section>
-      <div class="ai-page-footer">
-        <span class="muted">切换模型或服务地址将开启新上下文。</span>
-        <button class="ai-primary" @click="showConversation">
-          返回对话
-        </button>
-      </div>
+      </aside>
     </div>
   </section>
 </template>

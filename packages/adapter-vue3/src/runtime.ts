@@ -9,6 +9,8 @@ import {
   type PickerOptions,
   type InspectionSelection,
   type TraceSession,
+  type TraceCursor,
+  type TraceUpdate,
 } from '@zfs-boe-inspector/shared-types';
 import {
   mergeContributions,
@@ -30,8 +32,9 @@ export interface BoeInspectorBridge {
   startPicker?(mode: 'field' | 'area', instanceId?: string, options?: PickerOptions): PickerState;
   locateSelection?(selection: InspectionSelection, instanceId?: string): boolean;
   startTrace?(instanceId: string): TraceSession;
-  stopTrace?(): TraceSession | undefined;
+  stopTrace?(omitData?: boolean): TraceSession | undefined;
   getTrace?(): TraceSession | undefined;
+  getTraceUpdate?(cursor?: TraceCursor): TraceUpdate | undefined;
   clearTrace?(): void;
 }
 
@@ -84,7 +87,7 @@ export class BoeInspectorRuntime {
     return {
       apiVersion: BRIDGE_API_VERSION,
       connected: instances.length > 0,
-      capabilities: ['continuous-picker', 'area-picker', 'locate-selection', 'trace'],
+      capabilities: ['continuous-picker', 'area-picker', 'locate-selection', 'trace', 'trace-values', 'trace-incremental'],
       instances,
       ...(activeInstanceId ? { activeInstanceId } : {}),
     };
@@ -160,7 +163,8 @@ export class BoeInspectorRuntime {
       startPicker: (mode, id, options) => this.startPicker(mode, id, options),
       locateSelection: (selection, id) => this.locateSelection(selection, id),
       startTrace: (id) => this.trace.start(id, this.registrations.flatMap(({ target }) => target ? [target] : [])),
-      stopTrace: () => this.trace.stop(),
+      stopTrace: (omitData) => { const session = this.trace.stop(); return omitData ? undefined : session; },
+      getTraceUpdate: (cursor) => this.trace.getUpdate(cursor),
       getTrace: () => this.trace.get(),
       clearTrace: () => this.trace.clear(),
       getSnapshot: (instanceId) => this.getSnapshot(instanceId),

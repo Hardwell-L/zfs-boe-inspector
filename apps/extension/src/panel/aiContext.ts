@@ -55,7 +55,7 @@ export function compactConfig(raw: unknown) {
 export function scopeIdentity(scope: InspectionSelection): string {
   if (scope.kind === 'bill') return 'bill';
   return JSON.stringify(scope.kind === 'field'
-    ? [scope.kind, scope.areaCode, scope.fieldCode, scope.rowIndex]
+    ? [scope.kind, scope.areaCode, scope.fieldCode, scope.rowIndex, ...(scope.fieldIndex === undefined ? [] : [scope.fieldIndex])]
     : [scope.kind, scope.areaCode, scope.rowIndexes ? [...new Set(scope.rowIndexes)].sort((a, b) => a - b) : null]);
 }
 
@@ -64,8 +64,9 @@ export function scopeLabel(snapshot: BoeInspectionSnapshot, scope: InspectionSel
   const area = object(snapshot.config.template.find((item) => object(item).areaCode === scope.areaCode));
   const areaName = area.areaName || area.areaLabel || scope.areaCode;
   if (scope.kind === 'area') return `${areaName} · ${scope.rowIndexes ? scope.rowIndexes.map((row) => row + 1).join('、') + ' 行' : '全部行'}`;
-  const field = object((Array.isArray(area.areaFields) ? area.areaFields : []).find((item: unknown) => (object(item).fieldCode ?? object(item).code) === scope.fieldCode));
-  return `${field.fieldName || field.label || scope.fieldCode} · ${areaName} · 第 ${scope.rowIndex + 1} 行`;
+  const fields = Array.isArray(area.areaFields) ? area.areaFields : [];
+  const field = object(scope.fieldIndex === undefined ? fields.find((item: unknown) => (object(item).fieldCode ?? object(item).code) === scope.fieldCode) : fields[scope.fieldIndex]);
+  return `${field.fieldName || field.label || scope.fieldCode} · ${areaName} · 第 ${scope.rowIndex + 1} 行${scope.fieldIndex === undefined ? '' : ` · 配置项 ${scope.fieldIndex + 1}`}`;
 }
 
 function currentValue(snapshot: BoeInspectionSnapshot, areaCode: string, field: Record<string, any>, rowIndex: number) {
@@ -124,6 +125,8 @@ export function buildAiEvidence(
     if (scope.kind === 'area') return row === undefined || !scope.rowIndexes || scope.rowIndexes.includes(row);
     return field === scope.fieldCode && (row === undefined || row === scope.rowIndex);
   });
+  const directConfig = (area: string, field: string, fieldIndex: number) => all || selections.some((scope) => scope.kind !== 'bill' && scope.areaCode === area
+    && (scope.kind === 'area' || scope.fieldCode === field && (scope.fieldIndex === undefined || scope.fieldIndex === fieldIndex)));
   const diagnostics: RuleDiagnosticEntry[] = Object.values(buildRuleDiagnostics(snapshot)).flatMap((model) => model.entries);
   // 始终与用户原始范围匹配，补充的依赖不会再触发下一轮规则扩散。
   const related = diagnostics.filter((entry) => direct(entry.areaCode ?? '', entry.fieldCode, entry.rowIndex)
@@ -146,11 +149,11 @@ export function buildAiEvidence(
   const parameterReferences = new Map<string, { source: string; referencedBy: string[]; totalRows: number; omittedRows: number; resolution: string }>();
   for (const rawArea of snapshot.config.template) {
     const area = object(rawArea);
-    for (const rawField of Array.isArray(area.areaFields) ? area.areaFields : []) {
+    for (const [fieldIndex, rawField] of (Array.isArray(area.areaFields) ? area.areaFields : []).entries()) {
       const field = object(rawField);
       const areaCode = String(area.areaCode ?? '');
       const fieldCode = String(field.fieldCode ?? field.code ?? '');
-      if (!direct(areaCode, fieldCode)) continue;
+      if (!directConfig(areaCode, fieldCode, fieldIndex)) continue;
       let source = field.dataSource;
       if (typeof source === 'string') {
         try { source = JSON.parse(source); } catch { source = undefined; }
@@ -189,7 +192,10 @@ export function buildAiEvidence(
       const field = object(rawField);
       const fieldCode = String(field.fieldCode ?? field.code ?? '');
       if (!match(areaCode, fieldCode)) return;
-      const group = direct(areaCode, fieldCode) ? 'selected' : 'dependencies';
+      const selectedConfig = directConfig(areaCode, fieldCode, fieldIndex);
+      // 同编码配置共享运行时值，但不能被误标成用户选中的配置项。
+      if (!selectedConfig && direct(areaCode, fieldCode)) return;
+      const group = selectedConfig ? 'selected' : 'dependencies';
       const rows = object(snapshot.runtime.rawBillData)[areaCode];
       const rowIndexes = new Set<number>();
       if (Array.isArray(rows)) rows.forEach((_row, index) => { if (match(areaCode, fieldCode, index)) rowIndexes.add(index); });
@@ -199,7 +205,7 @@ export function buildAiEvidence(
       }
       dependencies.get(`${areaCode}.${fieldCode}`)?.forEach((row) => rowIndexes.add(row));
       if (!rowIndexes.size) rowIndexes.add(0);
-      const selection: InspectionSelection = { kind: 'field', areaCode, fieldCode, rowIndex: [...rowIndexes][0]! };
+      const selection: InspectionSelection = { kind: 'field', areaCode, fieldCode, fieldIndex, rowIndex: [...rowIndexes][0]! };
       add(`${field.fieldName ?? fieldCode} · 配置`, `config.template.${areaIndex}.areaFields.${fieldIndex}`, { ...compactConfig(rawField), ...(parameterReferences.has(`${areaCode}.${fieldCode}`) ? { referenceContext: parameterReferences.get(`${areaCode}.${fieldCode}`) } : {}) }, group, 'config', selection);
       const descriptors = snapshot.config.fieldDescriptors?.[String(field.fieldType)]?.filter((item) => Object.hasOwn(field, item.code));
       if (descriptors?.length) add(`${field.fieldName ?? fieldCode} · 属性说明`, `config.template.${areaIndex}.areaFields.${fieldIndex}.descriptors`, descriptors, 'context', 'config', selection);
@@ -261,11 +267,12 @@ export function buildAiEvidence(
   if (trace?.instanceId === snapshot.instanceId) {
     add('追踪覆盖与缺口', 'trace.coverage', { coverage: trace.coverage, limitations: trace.limitations, startedAt: trace.startedAt, stoppedAt: trace.stoppedAt }, 'trace', 'trace');
     for (const event of trace.events) {
-      if (!match(event.areaCode ?? '', event.fieldCode, event.rowIndex)) continue;
+      if (!match(event.areaCode ?? '', event.fieldCode, event.rowIndex) && !event.triggers?.some((trigger) => match(trigger.areaCode, trigger.fieldCode, trigger.rowIndex))) continue;
       const scopedEvent = all ? event : {
         id: event.id, parentId: event.parentId, at: event.at, method: event.method,
         category: event.category, status: event.status, error: event.error,
         areaCode: event.areaCode, fieldCode: event.fieldCode, rowIndex: event.rowIndex,
+        triggers: event.triggers?.filter((trigger) => match(trigger.areaCode, trigger.fieldCode, trigger.rowIndex)),
         before: Object.fromEntries(Object.entries(object(event.before)).filter(([field]) => match(event.areaCode ?? '', field, event.rowIndex))),
         after: Object.fromEntries(Object.entries(object(event.after)).filter(([field]) => match(event.areaCode ?? '', field, event.rowIndex))),
         note: '仅包含所选范围和直接依赖的前后值；完整输入输出需从过程面板显式加入。',

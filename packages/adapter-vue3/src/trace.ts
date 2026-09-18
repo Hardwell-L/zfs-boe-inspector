@@ -1,5 +1,6 @@
-import type { BoeInspectionSnapshot, JsonValue, TraceEvent, TraceSession } from '@zfs-boe-inspector/shared-types';
+import type { BoeInspectionSnapshot, JsonValue, TraceCursor, TraceUpdate, TraceEvent, TraceSession } from '@zfs-boe-inspector/shared-types';
 import { toSerializable } from './serialize';
+import { traceTriggers } from './traceContext';
 
 const METHODS: Record<string, string> = {
   updateBoeData: '字段更新',
@@ -27,6 +28,7 @@ export class TraceRecorder {
   private stack: string[] = [];
   private size = 0;
   private counter = 0;
+  private sessionSequence = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly snapshot: (instanceId: string) => BoeInspectionSnapshot) {}
@@ -41,7 +43,7 @@ export class TraceRecorder {
       method, supported: selected.some(({ component }) => typeof (component as Record<string, unknown>)[method] === 'function'),
     }));
     this.session = {
-      id: `trace-${Date.now()}`, instanceId, active: true, startedAt: new Date().toISOString(),
+      id: `trace-${Date.now()}-${++this.sessionSequence}`, instanceId, active: true, startedAt: new Date().toISOString(),
       events: [], coverage, startSnapshot,
       limitations: [
         '只观察实际存在的组件方法入口，不保证覆盖内部表达式、被捕获的异常或服务端过程。',
@@ -68,6 +70,18 @@ export class TraceRecorder {
 
   get(): TraceSession | undefined {
     return this.session;
+  }
+
+  getUpdate(cursor?: TraceCursor): TraceUpdate | undefined {
+    const session = this.session;
+    if (!session) return;
+    const reset = cursor?.sessionId !== session.id || !Number.isInteger(cursor?.offset)
+      || cursor!.offset < 0 || cursor!.offset > session.events.length;
+    const offset = reset ? 0 : cursor!.offset;
+    const { events, startSnapshot, endSnapshot, ...meta } = session;
+    return { ...meta, reset, eventOffset: offset, events: events.slice(offset),
+      ...(reset ? { startSnapshot } : {}),
+      ...(endSnapshot && (reset || !cursor?.ended) ? { endSnapshot } : {}) };
   }
 
   stop(reason = '用户停止记录'): TraceSession | undefined {
@@ -99,7 +113,7 @@ export class TraceRecorder {
 
   private safe(value: unknown): JsonValue {
     try {
-      const result = toSerializable(value, { maxDepth: 8, maxArrayLength: 30, maxObjectKeys: 50 });
+      const result = toSerializable(value, { maxDepth: 8, maxArrayLength: 30, maxObjectKeys: 50, maxNodes: 500, maxStringLength: 8192, maxTotalStringLength: 32768 });
       return JSON.stringify(result).length > 32_768 ? { __kind: 'truncated', reason: 'event-value-limit' } : result;
     }
     catch { return { __kind: 'unreadable' }; }
@@ -140,7 +154,18 @@ export class TraceRecorder {
       const parentId = this.stack.at(-1);
       if (parentId) event.parentId = parentId;
       try {
+        let data: unknown;
+        let dataReadFailed = false;
+        try { data = component.data; } catch { dataReadFailed = true; }
+        event.triggers = traceTriggers(method, args, data).map((trigger) => {
+          const { value, ...scope } = trigger;
+          return { ...scope, ...(dataReadFailed && trigger.source === 'unavailable' ? { reason: 'read-error' as const } : {}), ...(Object.hasOwn(trigger, 'value') ? { value: this.safe(value) } : {}) };
+        });
         const payload = args[0] && typeof args[0] === 'object' ? args[0] as Record<string, any> : {};
+        if (method === 'updateBoeData' && payload.value && typeof payload.value === 'object') {
+          const omitted = Object.keys(payload.value).length - (event.triggers?.length ?? 0);
+          if (omitted > 0) event.triggersOmitted = omitted;
+        }
         const areaCode = payload.areaCode ?? (['reCalculate', 'reComputed'].includes(method) ? args[0] : undefined);
         const rowIndex = payload.rowIndex ?? (['reCalculate', 'reComputed'].includes(method) ? args[1] : undefined);
         const field = payload.field ?? (['reCalculate', 'reComputed'].includes(method) ? args[2] : undefined);
@@ -148,6 +173,12 @@ export class TraceRecorder {
         if (typeof areaCode === 'string') event.areaCode = areaCode;
         if (typeof fieldCode === 'string') event.fieldCode = fieldCode;
         if (typeof rowIndex === 'number') event.rowIndex = rowIndex;
+        if (method === 'triggerComputeMixin' && event.triggers?.[0]) {
+          const trigger = event.triggers[0];
+          event.areaCode = trigger.areaCode;
+          event.fieldCode = trigger.fieldCode;
+          if (trigger.rowIndex !== undefined) event.rowIndex = trigger.rowIndex;
+        }
       } catch { /* 无法读取作用域时仍保留方法入口。 */ }
       const readRow = () => component.data?.[event.areaCode ?? '']?.[event.rowIndex ?? 0];
       try { event.before = this.safe(readRow()); } catch { /* 采集不阻断业务。 */ }

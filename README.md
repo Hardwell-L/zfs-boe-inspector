@@ -28,6 +28,138 @@ pnpm build
 
 构建产物位于 `apps/extension/dist`。在 Chrome 的 `chrome://extensions` 中开启开发者模式，选择“加载已解压的扩展程序”，加载该目录。打开已接入 Adapter 的 BOE 页面后点击扩展图标，即可在浏览器 Side Panel 中使用；也可以在 DevTools 中选择 `BOE Inspector`。
 
+## 构建、提交与发布
+
+发布前先使用仓库指定的 Node.js 版本并安装锁定依赖：
+
+```bash
+nvm use
+pnpm install --frozen-lockfile
+```
+
+### 提交与推送代码
+
+提交前检查工作区和实际 diff，只暂存本次修改文件：
+
+```bash
+git status
+git diff
+git diff --check
+
+git add path/to/changed-file
+git commit -m "fix(extension): 修复具体问题"
+git push origin main
+```
+
+### 本地检查与打包
+
+```bash
+pnpm release:check
+pnpm lint
+pnpm test
+pnpm typecheck
+pnpm build
+```
+
+生成 npm tarball：
+
+```bash
+pnpm pack:npm
+```
+
+产物位于 `release/npm`，只包含：
+
+- `zfs-boe-inspector-shared-types-<version>.tgz`
+- `zfs-boe-inspector-adapter-vue3-<version>.tgz`
+
+生成 Extension ZIP 和 SHA-256：
+
+```bash
+pnpm pack:extension
+```
+
+产物位于 `release`：
+
+- `zfs-boe-inspector-extension-v<version>.zip`
+- `zfs-boe-inspector-extension-v<version>.zip.sha256`
+
+可在 `release` 目录校验 ZIP：
+
+```bash
+cd release
+shasum -a 256 -c zfs-boe-inspector-extension-v0.2.3.zip.sha256
+cd ..
+```
+
+### 完整发布 npm 与 Extension
+
+先将根 `package.json`、所有 workspace `package.json`、Extension manifest 和 `CHANGELOG.md` 更新为同一版本，然后执行：
+
+```bash
+RELEASE_VERSION=0.2.4
+
+pnpm release:check "v${RELEASE_VERSION}"
+pnpm lint
+pnpm test
+pnpm typecheck
+pnpm build
+pnpm pack:npm
+pnpm pack:extension
+
+git add package.json \
+  packages/shared-types/package.json \
+  packages/adapter-vue3/package.json \
+  packages/core/package.json \
+  packages/rule-base/package.json \
+  apps/extension/package.json \
+  apps/extension/public/manifest.json \
+  CHANGELOG.md
+git commit -m "chore(release): 发布 ${RELEASE_VERSION}"
+git push origin main
+
+git tag "v${RELEASE_VERSION}"
+git push origin "v${RELEASE_VERSION}"
+```
+
+`v*` Tag 会触发 GitHub Release workflow，按顺序发布 `shared-types`、`adapter-vue3`，并上传 Extension ZIP 和 SHA-256。正常情况下不需要在本地执行 `npm publish`。
+
+### 仅发布 Extension
+
+只更新 `apps/extension/package.json`、`apps/extension/public/manifest.json` 和 `CHANGELOG.md`，npm package 版本保持不变：
+
+```bash
+EXTENSION_VERSION=0.2.4
+
+pnpm release:check "extension-v${EXTENSION_VERSION}"
+pnpm lint
+pnpm build
+pnpm pack:extension
+
+git add apps/extension/package.json \
+  apps/extension/public/manifest.json \
+  CHANGELOG.md
+git commit -m "chore(extension): 发布 Extension ${EXTENSION_VERSION}"
+git push origin main
+
+git tag "extension-v${EXTENSION_VERSION}"
+git push origin "extension-v${EXTENSION_VERSION}"
+```
+
+`extension-v*` Tag 只构建并上传 Extension ZIP 和 SHA-256，不执行 `publish:npm`。Tag 必须使用小写。
+
+### 手动发布 npm 兜底
+
+仅在 GitHub Trusted Publishing 无法使用时，发布 `pnpm pack:npm` 生成的 tarball：
+
+```bash
+RELEASE_VERSION=0.2.4
+
+npm publish "release/npm/zfs-boe-inspector-shared-types-${RELEASE_VERSION}.tgz" --access public
+npm publish "release/npm/zfs-boe-inspector-adapter-vue3-${RELEASE_VERSION}.tgz" --access public
+```
+
+必须先发布 `shared-types`，再发布 `adapter-vue3`。禁止直接在 workspace package 目录执行 `npm publish`，避免把 `workspace:` 依赖写入 npm registry。Trusted Publisher 和完整发布约定见[发布流程](docs/release.md)。
+
 ## BOE 项目接入
 
 只需要安装 Adapter，`shared-types` 会作为依赖自动安装：

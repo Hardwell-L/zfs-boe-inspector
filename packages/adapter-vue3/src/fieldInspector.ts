@@ -75,14 +75,18 @@ export function getFieldDetail(
   if (areaIndex < 0) return undefined;
   const area = record(snapshot.config.template[areaIndex]);
   const fields = Array.isArray(area?.areaFields) ? area.areaFields : [];
-  const field = fields.find((value: unknown) => {
+  const matches = (value: unknown) => {
     const item = record(value);
-    return item?.fieldCode === selection.fieldCode || item?.labelCode === selection.fieldCode;
-  });
+    return (item && String(item.fieldCode ?? '') === selection.fieldCode) || item?.labelCode === selection.fieldCode;
+  };
+  const fieldIndex = selection.fieldIndex ?? fields.findIndex(matches);
+  if (!Number.isInteger(fieldIndex) || fieldIndex < 0 || !matches(fields[fieldIndex])) return undefined;
+  const field = fields[fieldIndex];
   const fieldRecord = record(field);
   if (!area || !fieldRecord) return undefined;
   const resolvedSelection: FieldSelection = {
     ...selection,
+    fieldIndex,
     fieldCode: String(fieldRecord.fieldCode ?? selection.fieldCode),
   };
   const row = record((record(snapshot.runtime.rawBillData)?.[selection.areaCode] as unknown[])?.[selection.rowIndex]);

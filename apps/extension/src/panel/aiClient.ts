@@ -54,16 +54,33 @@ function requestError(status: number): Error {
   return new Error(message[status] ?? `模型服务请求失败（HTTP ${status}），请稍后重试`);
 }
 
-export async function testAiConnection(settings: AiSettings): Promise<void> {
+export interface AiConnectionTestResult { status: 'success' | 'warning'; message: string }
+
+export async function testAiConnection(settings: AiSettings): Promise<AiConnectionTestResult> {
   if (!settings.key.trim()) throw new Error('请先填写 API Key');
-  const response = await fetch(endpoint(settings, 'chat/completions'), {
+  if (!settings.model.trim()) throw new Error('请先填写模型标识');
+  const requestUrl = endpoint(settings, 'chat/completions');
+  const model = settings.model.trim();
+  const testTokenLimit = 128;
+  // 仅对官方已知模型关闭测试思考，避免给其他兼容服务发送专用参数。
+  const disableThinking = new URL(requestUrl).origin === 'https://api.deepseek.com'
+    && ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-flash'].includes(model);
+  const response = await fetch(requestUrl, {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20_000),
     headers: { Authorization: `Bearer ${settings.key.trim()}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: settings.model.trim(), messages: [{ role: 'user', content: 'Reply OK' }], max_tokens: 8, stream: false }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply only OK.' }], max_tokens: testTokenLimit, stream: false,
+      ...(disableThinking ? { thinking: { type: 'disabled' } } : {}) }),
   });
   if (!response.ok) throw requestError(response.status);
-  const result = await response.json();
-  if (!Array.isArray(result.choices)) throw new Error('服务返回了不兼容的响应');
+  const result: unknown = await response.json();
+  const choices = result && typeof result === 'object' && 'choices' in result ? result.choices : undefined;
+  if (Array.isArray(choices) && choices.some((choice) => choice?.finish_reason === 'length')) {
+    return { status: 'warning', message: `⚠ 接口已连通，但测试回复达到 ${testTokenLimit} tokens 上限，尚未验证完整文本回答。` };
+  }
+  if (!Array.isArray(choices) || !choices.some((choice) => typeof choice?.message?.content === 'string' && choice.message.content.trim())) {
+    throw new Error('接口已响应，但模型未返回可用文本回答，请检查模型与接口兼容性');
+  }
+  return { status: 'success', message: '✓ 连接及模型调用成功' };
 }
 
 export interface StreamResult {

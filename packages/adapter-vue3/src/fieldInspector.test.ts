@@ -3,6 +3,24 @@ import type { BoeInspectionSnapshot } from '@zfs-boe-inspector/shared-types';
 import { getAreaDetail, getFieldDetail, parseFieldDomId } from './fieldInspector';
 
 describe('字段检查器', () => {
+  it('重复编码按原始配置索引分别读取，不接受失效索引或不匹配编码', () => {
+    const snapshot: BoeInspectionSnapshot = {
+      schemaVersion: 1, instanceId: 'bill', capturedAt: '2026-09-18T00:00:00Z',
+      meta: { projectCode: 'test', environment: 'test', adapterVersion: 'test' },
+      config: { template: [{ areaCode: 'detail', areaFields: [
+        { fieldCode: 'amount', fieldName: '第一项', fieldType: 'input' },
+        { fieldCode: 'amount', fieldName: '第二项', fieldType: 'number' },
+      ] }] }, runtime: { rawBillData: { detail: [{ amount: 0 }] } },
+    };
+    const selection = { areaCode: 'detail', fieldCode: 'amount', rowIndex: 0 };
+    expect(getFieldDetail(snapshot, { ...selection, fieldIndex: 1 })?.field).toMatchObject({ fieldName: '第二项' });
+    expect(getFieldDetail(snapshot, { ...selection, fieldIndex: 1 })?.value).toBe(0);
+    expect(getFieldDetail(snapshot, selection)?.selection.fieldIndex).toBe(0);
+    expect(getFieldDetail(snapshot, { ...selection, fieldIndex: 2 })).toBeUndefined();
+    expect(getFieldDetail(snapshot, { ...selection, fieldIndex: -1 })).toBeUndefined();
+    expect(getFieldDetail(snapshot, { ...selection, fieldIndex: 1, fieldCode: 'other' })).toBeUndefined();
+  });
+
   it('从 BOE DOM id 解析区域、行号与字段', () => {
     expect(parseFieldDomId('boeHeader.0.amount')).toEqual({
       areaCode: 'boeHeader',

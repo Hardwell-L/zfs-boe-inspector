@@ -15,7 +15,7 @@ const selectionIndex = computed(() => {
   const fields = new Set<string>();
   const rowsByArea = new Map<string, Set<number> | null>();
   for (const scope of props.scopes) {
-    if (scope.kind === 'field') fields.add(JSON.stringify([scope.areaCode, scope.fieldCode, scope.rowIndex]));
+    if (scope.kind === 'field') fields.add(JSON.stringify([scope.areaCode, scope.fieldCode, scope.rowIndex, scope.fieldIndex ?? null]));
     if (scope.kind === 'area') {
       if (!scope.rowIndexes) rowsByArea.set(scope.areaCode, null);
       else if (rowsByArea.get(scope.areaCode) !== null) rowsByArea.set(scope.areaCode, new Set([...(rowsByArea.get(scope.areaCode) ?? []), ...scope.rowIndexes]));
@@ -41,13 +41,13 @@ function rowsFor(area: Area) {
     ? Array.from({ length: Math.max(1, area.rows.length) }, (_, index) => index)
     : [Number(rowChoices.value[area.code] ?? 0)];
 }
-function covered(area: string, field: string, row: number) {
+function covered(area: string, field: string, row: number, fieldIndex?: number) {
   const index = selectionIndex.value;
   return index.bill || index.rowsByArea.get(area) === null || index.rowsByArea.get(area)?.has(row)
-    || index.fields.has(JSON.stringify([area, field, row]));
+    || index.fields.has(JSON.stringify([area, field, row, fieldIndex ?? null])) || index.fields.has(JSON.stringify([area, field, row, null]));
 }
 function selectionCount(area: Area, fields: Field[]) {
-  return fields.reduce((count, field) => count + rowsFor(area).filter((row) => covered(area.code, field.code, row)).length, 0);
+  return fields.reduce((count, field) => count + rowsFor(area).filter((row) => covered(area.code, field.code, row, field.fieldIndex)).length, 0);
 }
 function fullySelected(area: Area, fields: Field[]) {
   return selectionCount(area, fields) === fields.length * rowsFor(area).length;
@@ -56,23 +56,26 @@ function partiallySelected(area: Area, fields: Field[]) {
   return selectionCount(area, fields) > 0 && !fullySelected(area, fields);
 }
 function expandScope(scope: InspectionSelection): InspectionSelection[] {
-  if (scope.kind === 'field') return [scope];
+  if (scope.kind === 'field') {
+    if (scope.fieldIndex !== undefined) return [scope];
+    return areas.value.find((area) => area.code === scope.areaCode)?.fields.filter((field) => field.code === scope.fieldCode).map((field) => ({ ...scope, fieldIndex: field.fieldIndex })) ?? [scope];
+  }
   const matched = scope.kind === 'bill' ? areas.value : areas.value.filter((area) => area.code === scope.areaCode);
   if (!matched.length) return [scope];
   return matched.flatMap((area) => {
     const rows = scope.kind === 'area' && scope.rowIndexes ? scope.rowIndexes
       : Array.from({ length: Math.max(1, area.rows.length) }, (_, index) => index);
-    return area.fields.flatMap((field) => rows.map((rowIndex): InspectionSelection => ({ kind: 'field', areaCode: area.code, fieldCode: field.code, rowIndex })));
+    return area.fields.flatMap((field) => rows.map((rowIndex): InspectionSelection => ({ kind: 'field', areaCode: area.code, fieldCode: field.code, fieldIndex: field.fieldIndex, rowIndex })));
   });
 }
 function toggle(area: Area, fields: Field[]) {
   if (props.disabled) return;
-  const targets = fields.flatMap((field) => rowsFor(area).map((rowIndex): InspectionSelection => ({ kind: 'field', areaCode: area.code, fieldCode: field.code, rowIndex })));
+  const targets = fields.flatMap((field) => rowsFor(area).map((rowIndex): InspectionSelection => ({ kind: 'field', areaCode: area.code, fieldCode: field.code, fieldIndex: field.fieldIndex, rowIndex })));
   if (fullySelected(area, fields)) {
     const keys = new Set(targets.map(scopeIdentity));
     // 从整单或整区域中取消字段时展开范围，避免父级范围继续把该字段带入请求。
     emit('change', uniqueScopes(props.scopes.flatMap(expandScope).filter((scope) => !keys.has(scopeIdentity(scope)))));
-  } else emit('change', uniqueScopes([...props.scopes, ...targets.filter((target) => target.kind === 'field' && !covered(target.areaCode, target.fieldCode, target.rowIndex))]));
+  } else emit('change', uniqueScopes([...props.scopes, ...targets.filter((target) => target.kind === 'field' && !covered(target.areaCode, target.fieldCode, target.rowIndex, target.fieldIndex))]));
 }
 function valueText(value: unknown) {
   if (value === undefined) return '未采集';
@@ -121,7 +124,7 @@ function rowLabel(area: Area, index: number) {
         {{ search.trim() ? '勾选区域标题仅选择当前搜索结果' : '勾选区域标题可全选下方字段' }} · {{ area.fields.length }} 个字段
       </p>
       <div class="ai-scope-fields">
-        <label v-for="field in area.fields" :key="field.code" class="ai-scope-field">
+        <label v-for="field in area.fields" :key="field.fieldIndex" class="ai-scope-field">
           <input type="checkbox" :disabled="disabled" :checked="fullySelected(area, [field])" :indeterminate="partiallySelected(area, [field])" @change="toggle(area, [field])">
           <span><strong>{{ field.label }}</strong><small>{{ field.code }}</small><span class="ai-scope-value">{{ fieldValue(area, field) }}</span></span>
         </label>

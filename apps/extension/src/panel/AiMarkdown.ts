@@ -1,16 +1,16 @@
 import { defineComponent, h, type VNodeChild } from 'vue';
 
 // 仅生成受控 Vue 节点；原始 HTML、链接和图片一律作为文本展示。
-function inline(text: string, cite: (id: string) => void): VNodeChild[] {
+function inline(text: string, cite: ((id: string) => void) | undefined): VNodeChild[] {
   return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\[E\d+\])/g).filter(Boolean).map((part) => {
-    if (/^\[E\d+\]$/.test(part)) return h('button', { class: 'ai-citation', type: 'button', onClick: () => cite(part.slice(1, -1)) }, part);
+    if (/^\[E\d+\]$/.test(part)) return cite ? h('button', { class: 'ai-citation', type: 'button', onClick: () => cite(part.slice(1, -1)) }, part) : part;
     if (part.startsWith('`') && part.endsWith('`')) return h('code', part.slice(1, -1));
     if (part.startsWith('**') && part.endsWith('**')) return h('strong', inline(part.slice(2, -2), cite));
     return part;
   });
 }
 
-function blocks(text: string, cite: (id: string) => void): VNodeChild[] {
+function blocks(text: string, cite: ((id: string) => void) | undefined): VNodeChild[] {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   const nodes: VNodeChild[] = [];
   const cells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, '|'));
@@ -54,9 +54,9 @@ function blocks(text: string, cite: (id: string) => void): VNodeChild[] {
 
 export default defineComponent({
   name: 'AiMarkdown',
-  props: { text: { type: String, required: true } },
+  props: { text: { type: String, required: true }, citationsEnabled: { type: Boolean, default: true } },
   emits: { cite: (id: string) => /^E\d+$/.test(id) },
   setup(props, { emit }) {
-    return () => h('div', { class: 'ai-markdown' }, blocks(props.text, (id) => emit('cite', id)));
+    return () => h('div', { class: 'ai-markdown' }, blocks(props.text, props.citationsEnabled ? (id) => emit('cite', id) : undefined));
   },
 });
