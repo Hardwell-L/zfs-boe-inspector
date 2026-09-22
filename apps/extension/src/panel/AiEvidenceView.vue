@@ -7,7 +7,7 @@ import AiEvidenceValue from './AiEvidenceValue.vue';
 const props = defineProps<{ evidence: FrozenEvidence[]; canLocate: boolean; requests: unknown }>();
 const emit = defineEmits<{ locate: [selection: InspectionSelection] }>();
 const groups = computed(() => [
-  ['context', '单据背景'], ['selected', '所选字段与范围'], ['dependencies', '关联依赖'], ['diagnostics', '诊断'], ['trace', '过程'],
+  ['context', '单据背景'], ['selected', '所选字段与范围'], ['dependencies', '关联依赖'], ['diagnostics', '诊断'], ['trace', '过程'], ['knowledge', '参考文档'],
 ].map(([key, label]) => ({ key, label, items: props.evidence.filter((item) => item.group === key) })).filter((group) => group.items.length));
 function record(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 const runtimeFlags = [['visible', '显示'], ['editable', '可编辑'], ['required', '必填']] as const;

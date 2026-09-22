@@ -275,6 +275,10 @@ h1, h2, h3, p { margin-top: 0; }
 .ai-composer > p { max-height: 60px; overflow: auto; margin: 0 0 6px; font-size: 12px; }
 .ai-composer-hint { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 5px; }
 .ai-composer-hint button { padding: 2px 0; border: 0; color: #5144d4; }
+.ai-knowledge-options { align-items: center; gap: 4px 12px; margin: 8px 0 2px; font-size: 12px; line-height: 20px; }
+.ai-knowledge-options label { display: inline-flex; align-items: center; gap: 6px; }
+.ai-knowledge-options input[type="checkbox"] { flex: 0 0 14px; width: 14px; height: 14px; margin: 0; }
+.ai-knowledge-options button { padding: 0; font-size: inherit; line-height: inherit; }
 .ai-jump-latest { position: absolute; right: 20px; bottom: calc(100% + 8px); border-radius: 20px; color: #5144d4; box-shadow: 0 3px 12px #27204e12; }
 .ai-page-shell { position: relative; display: flex; flex: 1; min-height: 0; flex-direction: column; background: #f5f6fb; }
 .ai-tab-page { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 24px 136px 24px 24px; scrollbar-gutter: stable; }

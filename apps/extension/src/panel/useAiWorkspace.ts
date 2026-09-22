@@ -5,6 +5,9 @@ import { aiRequestBody, defaultAiSettings, loadAiSettings, saveAiSettings, strea
 import { bytes, recentHistory, sentEvidence } from './aiConversation';
 import { scopeIssues } from './aiScopes';
 import { deleteAiHistory, historyFromSession, loadAiHistory, saveAiHistory, type AiHistory } from './aiHistory';
+import { KNOWLEDGE_LIMITS, knowledgeQuery, type KnowledgeHit } from './knowledge';
+import { listKnowledge, searchKnowledge } from './knowledgeStore';
+import { knowledgeRevision, useKnowledgeBase } from './useKnowledgeBase';
 
 export interface AiSource { snapshot: BoeInspectionSnapshot; evaluations: RuleEvaluation[]; pageId: string }
 export type FrozenEvidence = ReturnType<typeof sentEvidence>[number] & Pick<AiEvidence, 'kind' | 'group'> & { selection?: InspectionSelection };
@@ -20,6 +23,7 @@ export interface AiSession {
   evidence: AiEvidence[]; answers: AiAnswer[]; context: number; basis: string; conditionsChanged: boolean;
   redact: ReturnType<typeof createRedactor>; error: string; note: string; scrollTop: number; followLatest: boolean;
   collapsed: boolean; staleDraft: boolean;
+  knowledgeEnabled: boolean; knowledgeHits: KnowledgeHit[]; knowledgeQuery: string; knowledgeKey: string; knowledgeNote: string;
 }
 interface ActiveRequest { id: number; sessionId: number; phase: 'preparing' | 'generating'; controller: AbortController }
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -31,8 +35,9 @@ const message = (reason: unknown) => reason instanceof Error ? reason.message : 
 const requestLimitLabel = (bytesValue: number) => `${Math.round(bytesValue / 1000)} KB`;
 
 export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSource>) {
+  const knowledge = useKnowledgeBase();
   const initialState = {
-    sessions: [] as AiSession[], activeId: 0, tab: 'conversation' as 'conversation' | 'evidence' | 'settings' | 'history',
+    sessions: [] as AiSession[], activeId: 0, tab: 'conversation' as 'conversation' | 'evidence' | 'settings' | 'history' | 'knowledge',
     source: undefined as AiSource | undefined, request: undefined as ActiveRequest | undefined,
     settings: { ...defaultAiSettings }, settingsReady: false, saving: false, settingsNote: '', settingsError: '',
     test: { status: 'idle' as 'idle' | 'testing' | 'success' | 'warning' | 'error', message: '' },
@@ -53,7 +58,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
   const deletedHistory = reactive(new Set<string>());
   const historyUnsaved = computed(() => failedHistory.size);
   const current = computed(() => state.sessions.find((session) => session.id === state.activeId));
-  const busy = computed(() => Boolean(state.request || state.test.status === 'testing' || state.saving || !state.settingsReady));
+  const busy = computed(() => Boolean(state.request || state.test.status === 'testing' || state.saving || !state.settingsReady || knowledge.state.busy));
   const configured = computed(() => Boolean(state.settings.baseUrl.trim() && state.settings.model.trim() && state.settings.key.trim()));
   const available = (session: AiSession) => Boolean(state.source && sourceIdentity(state.source) === session.binding && !session.staleDraft);
   const mutable = (session: AiSession) => !busy.value && available(session) && !state.pickerSessionId;
@@ -173,7 +178,8 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
       source: clone(source), draft: eventId ? '分析所选报错或过程，说明相关字段、原因、缺失证据及验证方法。' : '',
       scopes: clone(scopes), trace: trace ? clone(trace) : undefined, eventId, includeFormattedDto: false,
       evidence: [], answers: [], context: 0, basis: '', conditionsChanged: false, redact: createRedactor(), error: '', note: '',
-      scrollTop: 0, followLatest: true, collapsed: false, staleDraft: false });
+      scrollTop: 0, followLatest: true, collapsed: false, staleDraft: false,
+      knowledgeEnabled: false, knowledgeHits: [], knowledgeQuery: '', knowledgeKey: '', knowledgeNote: '' });
     const session = state.sessions[state.sessions.length - 1]!;
     rebuild(session); state.activeId = id; state.tab = 'conversation'; return session;
   }
@@ -224,6 +230,87 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     setScopes(session, [...session.scopes, selection], fromPicker);
   }
   function changeEvidence(session: AiSession) { session.conditionsChanged = true; }
+  function changeKnowledge(session: AiSession) {
+    session.conditionsChanged = true;
+  }
+  function setKnowledgeEnabled(session: AiSession, enabled: boolean) {
+    if (!mutable(session)) return;
+    session.knowledgeEnabled = enabled; changeKnowledge(session);
+  }
+  function setKnowledgeQuery(session: AiSession, query: string) {
+    if (!mutable(session)) return;
+    session.knowledgeQuery = query; changeKnowledge(session);
+  }
+  function toggleKnowledgeHit(session: AiSession, id: string) {
+    if (!mutable(session)) return;
+    const hit = session.knowledgeHits.find((item) => item.id === id);
+    if (hit) { hit.included = !hit.included; changeKnowledge(session); }
+  }
+  function knowledgeEvidence(session: AiSession): AiEvidence[] {
+    if (!session.knowledgeEnabled) return [];
+    const selected = session.knowledgeHits.filter((hit) => hit.included);
+    const ids = new Map(selected.map((hit, index) => [hit.id, `K${index + 1}`]));
+    return selected.map((hit, index) => ({
+      id: `K${index + 1}`, title: `${hit.title} · ${hit.heading}`, path: `knowledge.${hit.id}`,
+      value: { source: hit.source, heading: hit.heading, line: hit.line, version: hit.version || '未知', hash: hit.hash, text: hit.text,
+        relatedEvidenceIds: (hit.relatedIds ?? []).filter((id) => ids.has(id)).map((id) => ids.get(id)!),
+        missingRelatedSections: (hit.relatedIds ?? []).filter((id) => !ids.has(id)).map((id) => session.knowledgeHits.find((item) => item.id === id)?.heading ?? '正文缺失'),
+        unresolvedReferences: hit.unresolvedReferences ?? [] },
+      kind: 'knowledge', group: 'knowledge', automatic: true, included: true, original: false,
+    }));
+  }
+  function knowledgeBytes(session: AiSession) { return bytes(sentEvidence(knowledgeEvidence(session), session.redact)); }
+  function retrievalQuery(session: AiSession) {
+    const keys = new Set<string>();
+    const visit = (value: unknown, depth = 0) => {
+      if (!value || typeof value !== 'object' || depth > 6) return;
+      if (Array.isArray(value)) { value.slice(0, 50).forEach((item) => visit(item, depth + 1)); return; }
+      for (const [key, item] of Object.entries(value)) {
+        if (item !== null && item !== undefined && item !== '' && item !== false) keys.add(key);
+        visit(item, depth + 1);
+      }
+    };
+    session.evidence.filter((item) => item.included && item.kind === 'config').forEach((item) => visit(item.value));
+    return knowledgeQuery(session.knowledgeQuery.trim() || session.draft, [...keys]);
+  }
+  function retrievalKey(session: AiSession) {
+    return JSON.stringify([retrievalQuery(session), session.source.snapshot.meta.zfsPackages?.['@zfs/boe'] ?? '', knowledge.state.revision]);
+  }
+  const knowledgeStale = (session: AiSession) => session.knowledgeEnabled && session.knowledgeKey !== retrievalKey(session);
+  async function retrieve(session: AiSession, request: ActiveRequest, force = false) {
+    const documents = await listKnowledge();
+    if (!live(request)) return;
+    knowledge.state.documents = documents; knowledge.state.revision = knowledgeRevision(documents); knowledge.state.ready = true;
+    const key = retrievalKey(session);
+    if (!force && session.knowledgeKey === key) return;
+    const result = await searchKnowledge(retrievalQuery(session), session.source.snapshot.meta.zfsPackages?.['@zfs/boe'] ?? '', request.controller.signal);
+    if (!live(request)) return;
+    // 检索期间若其他面板更新了文档，要求重试，避免混用索引版本。
+    if (knowledgeRevision(await listKnowledge()) !== knowledge.state.revision) throw new Error('知识库已变化，请重新检索');
+    if (!live(request)) return;
+    session.knowledgeHits = result.hits; session.knowledgeKey = key; session.knowledgeNote = result.note;
+    let skipped = 0; let selected = 0;
+    const texts = new Set<string>();
+    for (const hit of session.knowledgeHits.filter((item) => !item.relatedOnly).slice(0, KNOWLEDGE_LIMITS.automaticRoots)) {
+      if (texts.has(hit.text)) continue;
+      // 正文与已解析的一层关联作为一组预算；不为塞进正文而偷偷丢掉例外章节。
+      const bundle = session.knowledgeHits.filter((item) => item.id === hit.id || hit.relatedIds?.includes(item.id));
+      const added = bundle.filter((item) => !item.included);
+      added.forEach((item) => { item.included = true; });
+      if (knowledgeBytes(session) > KNOWLEDGE_LIMITS.requestBytes) { added.forEach((item) => { item.included = false; }); skipped += 1; }
+      else { selected += 1; texts.add(hit.text); }
+    }
+    session.knowledgeNote += `；自动选入 ${selected} 组、共 ${session.knowledgeHits.filter((hit) => hit.included).length} 个章节${skipped ? `，${skipped} 组因预算不足未完整选入（未截断正文）` : ''}`;
+    changeKnowledge(session);
+  }
+  async function findKnowledge(session: AiSession) {
+    if (!session.knowledgeEnabled) return;
+    const request = acquire(session);
+    if (!request) return;
+    try { await retrieve(session, request, true); }
+    catch (reason) { if (live(request)) session.error = message(reason); }
+    finally { release(request); }
+  }
   function setDto(session: AiSession, enabled: boolean) {
     if (!mutable(session)) return;
     session.includeFormattedDto = enabled; session.conditionsChanged = true; rebuild(session);
@@ -233,7 +320,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     session.trace = undefined; session.eventId = ''; session.conditionsChanged = true; rebuild(session);
   }
   function requestView(session: AiSession, settings: AiSettings = state.settings) {
-    const selected = session.evidence.filter((item) => item.included);
+    const selected = [...session.evidence.filter((item) => item.included), ...knowledgeEvidence(session)];
     const evidence: FrozenEvidence[] = sentEvidence(selected, session.redact).map((item, index) => {
       const original = selected[index]!;
       return { ...item, kind: original.kind, group: original.group, ...(original.selection ? { selection: clone(original.selection) } : {}) };
@@ -249,7 +336,8 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
   }
   function reconcile(session: AiSession, settings: AiSettings) {
     const basis = JSON.stringify([{ ...session.source.snapshot, capturedAt: undefined }, session.scopes, session.trace, session.eventId,
-      session.includeFormattedDto, session.evidence.map((item) => [evidenceIdentity(item), item.included, item.original]), settings.baseUrl, settings.model]);
+      session.includeFormattedDto, session.evidence.map((item) => [evidenceIdentity(item), item.included, item.original]),
+      knowledgeEvidence(session), settings.baseUrl, settings.model]);
     if (session.basis && (session.conditionsChanged || session.basis !== basis)) session.context += 1;
     session.basis = basis; session.conditionsChanged = false;
   }
@@ -287,6 +375,14 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     });
     if (live(request)) { answer.status = result.status; answer.error = result.error ?? ''; persist(owner); }
   }
+  async function deliver(session: AiSession, prepared: ReturnType<typeof requestView>, settings: AiSettings, request: ActiveRequest, capturedAt: string) {
+    session.answers.push({ id: ++answerSequence, context: session.context, sentAt: new Date().toISOString(), capturedAt,
+      question: prepared.question, answer: '', status: 'streaming', error: '', evidence: clone(prepared.evidence), scopes: prepared.scopes,
+      service: { model: settings.model, baseUrl: settings.baseUrl, maxTokens: settings.maxTokens }, baseMessages: clone(prepared.body.messages), requests: [], omitted: prepared.omitted });
+    if (session.answers.length === 1 && !session.customTitle) session.title = prepared.question.slice(0, 16) || `会话 ${session.id}`;
+    session.draft = ''; session.followLatest = true;
+    await generate(session.answers[session.answers.length - 1]!, settings, prepared.body.messages, request);
+  }
   async function send(session: AiSession) {
     if (!configured.value || !session.draft.trim() || (!session.scopes.length && !session.eventId)) return;
     const request = acquire(session);
@@ -299,16 +395,16 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
       const issues = scopeIssues(session.source.snapshot, session.scopes);
       if (issues.length) throw new Error(issues.join('；'));
       if (session.eventId && (session.trace?.instanceId !== session.source.snapshot.instanceId || !session.trace.events.some((event) => event.id === session.eventId))) throw new Error('所选过程已失效，请重新选择');
+      if (session.knowledgeEnabled) {
+        await retrieve(session, request);
+        if (!live(request)) return;
+        if (knowledgeBytes(session) > KNOWLEDGE_LIMITS.requestBytes) throw new Error('所选文档超过 20 KB，请在范围与证据中减少章节');
+      }
       reconcile(session, settings);
       const prepared = requestView(session, settings);
-      if (!prepared.evidence.length) throw new Error('请选择至少一项发送证据');
+      if (!prepared.evidence.some((item) => item.kind !== 'knowledge')) throw new Error('请选择至少一项单据证据');
       if (bytes(prepared.body) > settings.maxRequestBytes) throw new Error(`请求超过 ${requestLimitLabel(settings.maxRequestBytes)}，请调整范围后重新发送`);
-      session.answers.push({ id: ++answerSequence, context: session.context, sentAt: new Date().toISOString(), capturedAt: session.source.snapshot.capturedAt,
-        question: prepared.question, answer: '', status: 'streaming', error: '', evidence: clone(prepared.evidence), scopes: prepared.scopes,
-        service: { model: settings.model, baseUrl: settings.baseUrl, maxTokens: settings.maxTokens }, baseMessages: clone(prepared.body.messages), requests: [], omitted: prepared.omitted });
-      if (session.answers.length === 1 && !session.customTitle) session.title = prepared.question.slice(0, 16) || `会话 ${session.id}`;
-      session.draft = ''; session.followLatest = true;
-      await generate(session.answers[session.answers.length - 1]!, settings, prepared.body.messages, request);
+      await deliver(session, prepared, settings, request, session.source.snapshot.capturedAt);
     } catch (reason) {
       if (live(request)) { session.error = message(reason); session.draft = draft; }
     } finally { release(request); }
@@ -338,6 +434,12 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
   watch(() => [state.settings.baseUrl, state.settings.model, state.settings.key, state.settings.maxTokens, state.settings.maxRequestBytes], () => {
     testSequence += 1; state.test = { status: 'idle', message: '' };
   }, { flush: 'sync' });
+  watch(() => knowledge.state.revision, () => {
+    for (const session of state.closed ? [...state.sessions, state.closed.session] : state.sessions) {
+      session.knowledgeKey = '';
+      if (session.knowledgeEnabled) session.conditionsChanged = true;
+    }
+  }, { flush: 'sync' });
   async function load() {
     const [settings, history] = await Promise.allSettled([loadAiSettings(), loadAiHistory()]);
     if (disposed) return;
@@ -345,6 +447,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     if (history.status === 'fulfilled') state.history = history.value; else state.historyError = message(history.reason);
     state.settingsReady = true; state.historyReady = true;
     if (!state.sessions.length && state.source) create();
+    void knowledge.reload();
   }
   async function save(clearKey = false) {
     if (busy.value) return;
@@ -370,6 +473,8 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     for (const session of state.sessions) if (historyTimers.has(session.historyId)) persist(session);
   });
   const workspace = { state, current, busy, configured, available, mutable, setSource, create, select, rename, close, undoClose, stop,
+    knowledge, changeKnowledge, setKnowledgeEnabled, setKnowledgeQuery, toggleKnowledgeHit,
+    findKnowledge, knowledgeBytes, knowledgeStale,
     retryHistory, reloadHistory, historyUnsaved, deleteHistory, historyDisabled,
     setScopes, addScope, changeEvidence, setDto, clearTrace, requestView, refresh, send, continueAnswer, load, save, test };
   return reactive<object>(workspace) as Omit<typeof workspace, 'current' | 'busy' | 'configured' | 'historyUnsaved'>

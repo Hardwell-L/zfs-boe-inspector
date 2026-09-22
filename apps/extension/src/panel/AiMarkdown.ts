@@ -2,8 +2,8 @@ import { defineComponent, h, type VNodeChild } from 'vue';
 
 // 仅生成受控 Vue 节点；原始 HTML、链接和图片一律作为文本展示。
 function inline(text: string, cite: ((id: string) => void) | undefined): VNodeChild[] {
-  return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\[E\d+\])/g).filter(Boolean).map((part) => {
-    if (/^\[E\d+\]$/.test(part)) return cite ? h('button', { class: 'ai-citation', type: 'button', onClick: () => cite(part.slice(1, -1)) }, part) : part;
+  return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[EK]\d+\])/g).filter(Boolean).map((part) => {
+    if (/^\[[EK]\d+\]$/.test(part)) return cite ? h('button', { class: 'ai-citation', type: 'button', onClick: () => cite(part.slice(1, -1)) }, part) : part;
     if (part.startsWith('`') && part.endsWith('`')) return h('code', part.slice(1, -1));
     if (part.startsWith('**') && part.endsWith('**')) return h('strong', inline(part.slice(2, -2), cite));
     return part;
@@ -55,7 +55,7 @@ function blocks(text: string, cite: ((id: string) => void) | undefined): VNodeCh
 export default defineComponent({
   name: 'AiMarkdown',
   props: { text: { type: String, required: true }, citationsEnabled: { type: Boolean, default: true } },
-  emits: { cite: (id: string) => /^E\d+$/.test(id) },
+  emits: { cite: (id: string) => /^[EK]\d+$/.test(id) },
   setup(props, { emit }) {
     return () => h('div', { class: 'ai-markdown' }, blocks(props.text, props.citationsEnabled ? (id) => emit('cite', id) : undefined));
   },

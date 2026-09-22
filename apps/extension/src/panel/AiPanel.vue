@@ -11,6 +11,8 @@ import AiScopeSelector from './AiScopeSelector.vue';
 import AiEvidenceView from './AiEvidenceView.vue';
 import DismissibleNotice from './DismissibleNotice.vue';
 import AiHistoryView from './AiHistoryView.vue';
+import AiKnowledgeView from './AiKnowledgeView.vue';
+import AiKnowledgeSelection from './AiKnowledgeSelection.vue';
 
 const props = defineProps<{ workspace: AiWorkspace; active: boolean; refreshing: boolean; pickerActive: boolean; continuousPicker: boolean; areaPicker: boolean }>();
 const emit = defineEmits<{ pick: [mode: 'field' | 'area']; finishPicker: []; locate: [selection: InspectionSelection] }>();
@@ -38,7 +40,7 @@ const valueSummary = computed(() => {
 });
 const largestEvidence = computed(() => (preview.value?.evidence ?? []).map((item) => ({ id: item.id, title: item.title, size: bytes(item.value) })).sort((a, b) => b.size - a.size).slice(0, 3));
 const hasScope = computed(() => Boolean(session.value?.scopes.length || session.value?.eventId));
-const groupLabels: Record<EvidenceGroup, string> = { context: '单据背景', selected: '所选字段与范围', dependencies: '关联依赖', diagnostics: '诊断', trace: '过程' };
+const groupLabels: Record<EvidenceGroup, string> = { context: '单据背景', selected: '所选字段与范围', dependencies: '关联依赖', diagnostics: '诊断', trace: '过程', knowledge: '参考文档' };
 const groups = computed(() => (Object.keys(groupLabels) as EvidenceGroup[]).map((key) => {
   const items = session.value?.evidence.filter((item) => item.group === key) ?? [];
   return { key, label: groupLabels[key], items, included: items.filter((item) => item.included).length };
@@ -151,7 +153,7 @@ async function copyAnswer(answer: AiAnswer) {
   catch { owner.error = '复制失败，请手动选择回答文本'; }
 }
 function invalidCitations(answer: AiAnswer) {
-  return [...new Set([...answer.answer.matchAll(/\[(E\d+)\]/g)].map((match) => match[1]!))].filter((id) => !answer.evidence.some((item) => item.id === id));
+  return [...new Set([...answer.answer.matchAll(/\[([EK]\d+)\]/g)].map((match) => match[1]!))].filter((id) => !answer.evidence.some((item) => item.id === id));
 }
 function statusText(answer: AiAnswer) {
   return { streaming: '生成中…', complete: '', length: '已达到输出上限，可继续生成', stopped: '已停止，内容已保留', error: '生成失败，内容已保留' }[answer.status];
@@ -192,6 +194,9 @@ function statusText(answer: AiAnswer) {
           </button>
         </div>
         <div class="ai-function-tabs">
+          <button :class="{ active: state.tab === 'knowledge' }" @click="state.tab = 'knowledge'">
+            知识库
+          </button>
           <button :class="{ active: state.tab === 'history' }" @click="state.tab = 'history'">
             问答历史
           </button>
@@ -220,7 +225,7 @@ function statusText(answer: AiAnswer) {
         重新读取
       </button>
     </DismissibleNotice>
-    <div v-if="!session && state.tab !== 'settings' && state.tab !== 'history'" class="ai-empty">
+    <div v-if="!session && state.tab !== 'settings' && state.tab !== 'history' && state.tab !== 'knowledge'" class="ai-empty">
       <p>请先在 BOE 页面刷新快照，再开始分析。</p><button @click="state.tab = 'settings'">
         模型设置
       </button>
@@ -316,6 +321,12 @@ function statusText(answer: AiAnswer) {
           {{ session.collapsed ? '展开输入区，继续提问' : '收起输入区' }}
         </button>
         <textarea v-show="!session.collapsed" ref="questionInput" v-model="session.draft" :disabled="draftLocked" rows="2" aria-label="描述问题" placeholder="描述问题或继续追问；Ctrl / ⌘ + Enter 发送" @keydown="questionKeydown" />
+        <div class="ai-composer-hint ai-knowledge-options">
+          <label><input v-model="session.knowledgeEnabled" type="checkbox" :disabled="locked" @change="workspace.changeKnowledge(session)">使用本地知识库</label>
+          <button v-if="session.knowledgeEnabled" @click="state.tab = 'evidence'">
+            核对参考章节
+          </button>
+        </div>
         <div class="ai-composer-footer">
           <button :disabled="!preview" @click="openPreview()">
             查看发送内容
@@ -417,8 +428,10 @@ function statusText(answer: AiAnswer) {
             </details>
           </details>
         </section>
+        <AiKnowledgeSelection :workspace="workspace" :session="session" :locked="locked" @manage="state.tab = 'knowledge'" />
       </div>
 
+      <AiKnowledgeView v-if="state.tab === 'knowledge'" :library="workspace.knowledge" :locked="Boolean(state.request) || pickerActive" />
       <AiHistoryView v-if="state.tab === 'history'" :entries="state.history" :loading="!state.historyReady" :saving="Boolean(state.historySaving)" :unsaved="workspace.historyUnsaved" :deleting="state.historyDeleting" @delete="workspace.deleteHistory($event)" @refresh="workspace.reloadHistory()" @retry="workspace.retryHistory()" />
       <div v-show="state.tab === 'settings'" class="ai-tab-page">
         <h3>模型设置</h3><p class="muted">
@@ -473,8 +486,17 @@ function statusText(answer: AiAnswer) {
         </header>
         <div class="ai-drawer-body">
           <p v-if="!viewedAnswer" class="muted">
-            当前快照内容，发送时自动更新。
+            当前内容仅供查看；发送时自动刷新单据证据，并按需检索参考文档。
           </p>
+          <template v-if="!viewedAnswer && session?.knowledgeEnabled">
+            <p>{{ session.knowledgeNote || '尚未检索参考文档' }}</p>
+            <p class="muted">
+              点击发送后，所选参考文档会与单据证据一起发送至模型服务。
+            </p>
+            <button @click="closePreview(); state.tab = 'evidence'">
+              调整参考章节
+            </button>
+          </template>
           <p>模型：{{ viewedAnswer?.service.model || state.settings.model }}</p>
           <p>采集时间：{{ formatLocalDateTime(viewedAnswer?.capturedAt || snapshot?.capturedAt) }}</p>
           <p v-if="viewedAnswer">
