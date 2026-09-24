@@ -32,4 +32,41 @@ describe('buildTravelView', () => {
       standards: [], calendar: [], requests: [], metrics: { travelDays: 0, standardCount: 0 },
     });
   });
+
+  it('低版本只把同一人员、日期和地点的宿主逐日金额展示为待核验标准', () => {
+    const view = buildTravelView({
+      inspectionMode: 'legacy',
+      currentPerson: { employeeId: 'E01', employeeName: '张三' },
+      queryConditions: { empId: 'E01' },
+      calendarData: [
+        { expenseDate: '2026-08-01', travelSite: '湖北,武汉', employeeId: 'E01', operationSubTypeCode: 'BT01', operationSubTypeName: '出差补助', attribute: 'CLBT', expenseAmount: 120 },
+        { expenseDate: '2026-08-02', travelSite: '武汉', employeeId: 'E02', operationSubTypeCode: 'BT01', attribute: 'CLBT', expenseAmount: 120 },
+      ],
+      calculatedCalendarStandards: [
+        { expenseDate: '2026-08-01', travelSite: '湖北,武汉', BT01_standard: 100 },
+        { expenseDate: '2026-08-02', travelSite: '武汉', BT01_standard: 100 },
+      ],
+      standardResults: {
+        武汉: [
+          { bizCategorySmallCode: 'BT01', bizCategorySmallName: '出差补助', attribute: 'CLBT', standardAmount: 100, schemeId: 'S01', travelDayBegin: 1, travelDayEnd: 30 },
+        ],
+      },
+    });
+    expect(view.legacy).toBe(true);
+    expect(view.calendar[0]).toMatchObject({ employeeName: '张三', businessType: '出差补助', pageStandardAmount: 100, candidateCount: 1 });
+    expect(view.calendar[0]?.overAmount).toBeUndefined();
+    expect(view.calendar[1]?.pageStandardAmount).toBeUndefined();
+    expect(view.standards[0]).toMatchObject({ schemeId: 'S01', conditions: '第 1–30 天' });
+  });
+
+  it('低版本人员或查询身份不一致时不归属页面计算标准', () => {
+    const view = buildTravelView({
+      inspectionMode: 'legacy',
+      currentPerson: { employeeId: 'E01', employeeName: '张三' },
+      queryConditions: { empId: 'E02' },
+      calendarData: [{ expenseDate: '2026-08-01', travelSite: '武汉', employeeId: 'E01', operationSubTypeCode: 'BT01' }],
+      calculatedCalendarStandards: [{ expenseDate: '2026-08-01', travelSite: '武汉', BT01_standard: 100 }],
+    });
+    expect(view.calendar[0]?.pageStandardAmount).toBeUndefined();
+  });
 });

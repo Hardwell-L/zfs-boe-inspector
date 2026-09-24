@@ -15,6 +15,19 @@ export interface RuntimeMetadata {
   operationTypeCode?: string;
   sourceSystemCode?: string;
   pageMode?: string;
+  compatibility?: CompatibilityMetadata;
+}
+
+export interface CompatibilityMetadata {
+  profile?: 'embedded-core' | 'standalone-core' | 'local-source' | 'runtime-only' | 'unknown';
+  fieldRuntime?: 'complete' | 'partial' | 'unavailable';
+  trace?: 'available' | 'unavailable';
+  travelRequestHistory?: 'available' | 'unavailable';
+  travelCacheMode?: 'date-site' | 'site' | 'mixed' | 'unknown';
+  collection?: {
+    status: 'complete' | 'partial' | 'unavailable';
+    reasons?: string[];
+  };
 }
 
 export interface FieldPropertyDescriptor {
@@ -44,8 +57,12 @@ export interface TravelStandardRequest {
 }
 
 export interface TravelInspectionData {
+  inspectionMode?: 'legacy';
+  queryConditions?: JsonValue;
+  billSummary?: JsonValue;
   trips?: JsonValue[];
   calendarData?: JsonValue[];
+  calculatedCalendarStandards?: JsonValue[];
   standardRequests?: TravelStandardRequest[];
   standardResults?: Record<string, JsonValue>;
   standardDates?: JsonValue[];

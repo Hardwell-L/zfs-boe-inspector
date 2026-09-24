@@ -70,6 +70,20 @@ export function evaluateTravelRules(snapshot: BoeInspectionSnapshot): RuleEvalua
     ));
   }
 
+  if (travel.inspectionMode === 'legacy' || snapshot.meta.compatibility?.travelRequestHistory === 'unavailable') {
+    // 旧版城市缓存、临时 standardDates 与新版日期请求缓存语义不同。
+    // 保留日期缺失检查，其余算法规则在证据不足时明确跳过。
+    const rows = travel.calendarData ?? travel.trips;
+    const dateIssues = (rows ?? []).flatMap((row, index) => {
+      if (!asRecord(row) || asRecord(row)?.__kind || dateFrom(row)) return [];
+      return [issue('TRAVEL_DATE_MISSING', 'travel-standard', 'warning', `差旅行程第 ${index + 1} 项缺少有效日期`, [`travel.${travel.calendarData ? 'calendarData' : 'trips'}.${index}`])];
+    });
+    return TRAVEL_RULE_IDS.flatMap((ruleId) => {
+      if (ruleId === 'TRAVEL_DATE_MISSING' && dateIssues.length) return dateIssues;
+      return [skipped(ruleId, 'travel-standard', '低版本仅提供现有数据；未验证完整性、请求历史与项目标准算法，不执行确定性判定', ['travel'])];
+    });
+  }
+
   const results: RuleEvaluation[] = [];
   const calendar = travel.calendarData ?? [];
   const trips = travel.trips ?? [];
@@ -106,21 +120,25 @@ export function evaluateTravelRules(snapshot: BoeInspectionSnapshot): RuleEvalua
     }
   }
 
+  const requestsAvailable = Array.isArray(travel.standardRequests);
   const requests = travel.standardRequests ?? [];
   const requestDates = new Set(requests.map(({ boeDate }) => boeDate?.slice(0, 10)).filter((date): date is string => Boolean(date)));
-  for (const date of new Set(validDates)) {
-    if (!requestDates.has(date)) {
-      results.push(issue(
-        'TRAVEL_STANDARD_REQUEST_MISSING',
-        'travel-standard',
-        'error',
-        `差旅日期 ${date} 没有对应的标准请求`,
-        ['travel.calendarData', 'travel.standardRequests'],
-        { actual: date },
-      ));
+  if (requestsAvailable) {
+    for (const date of new Set(validDates)) {
+      if (!requestDates.has(date)) {
+        results.push(issue(
+          'TRAVEL_STANDARD_REQUEST_MISSING',
+          'travel-standard',
+          'error',
+          `差旅日期 ${date} 没有对应的标准请求`,
+          ['travel.calendarData', 'travel.standardRequests'],
+          { actual: date },
+        ));
+      }
     }
   }
 
+  const resultsAvailable = travel.standardResults !== undefined;
   const resultEntries = Object.entries(travel.standardResults ?? {});
   const resultDates = new Set(resultEntries
     .map(([key, value]) => resultDate(key, value))
@@ -128,34 +146,38 @@ export function evaluateTravelRules(snapshot: BoeInspectionSnapshot): RuleEvalua
   const cachedDates = new Set((travel.standardDates ?? [])
     .map((value) => typeof value === 'string' ? value.slice(0, 10) : dateFrom(value))
     .filter((date): date is string => Boolean(date)));
-  for (const date of new Set([...requestDates, ...cachedDates])) {
-    if (!resultDates.has(date)) {
-      results.push(issue(
-        'TRAVEL_STANDARD_RESULT_MISSING',
-        'travel-standard',
-        'error',
-        `日期 ${date} 已请求或进入缓存，但没有标准结果`,
-        ['travel.standardRequests', 'travel.standardDates', 'travel.standardResults'],
-        { actual: date },
-      ));
+  if (resultsAvailable) {
+    for (const date of new Set([...requestDates, ...cachedDates])) {
+      if (!resultDates.has(date)) {
+        results.push(issue(
+          'TRAVEL_STANDARD_RESULT_MISSING',
+          'travel-standard',
+          'error',
+          `日期 ${date} 已请求或进入缓存，但没有标准结果`,
+          ['travel.standardRequests', 'travel.standardDates', 'travel.standardResults'],
+          { actual: date },
+        ));
+      }
     }
   }
-  for (const date of resultDates) {
-    if (requestDates.size > 0 && !requestDates.has(date)) {
-      results.push(issue(
-        'TRAVEL_STANDARD_DATE_MISMATCH',
-        'travel-standard',
-        'warning',
-        `标准结果日期 ${date} 未出现在请求日期中`,
-        ['travel.standardRequests', 'travel.standardResults'],
-      ));
+  if (resultsAvailable && requestsAvailable) {
+    for (const date of resultDates) {
+      if (requestDates.size > 0 && !requestDates.has(date)) {
+        results.push(issue(
+          'TRAVEL_STANDARD_DATE_MISMATCH',
+          'travel-standard',
+          'warning',
+          `标准结果日期 ${date} 未出现在请求日期中`,
+          ['travel.standardRequests', 'travel.standardResults'],
+        ));
+      }
     }
   }
 
   datedItems.forEach((item, index) => {
     const date = dateFrom(item);
     const site = textFrom(item, ['staySite', 'travelSite', 'cityName', 'site']);
-    if (!date || !site || resultEntries.length === 0) return;
+    if (!date || !site || !resultsAvailable || resultEntries.length === 0) return;
     const matched = resultEntries.some(([key, value]) => {
       const record = asRecord(value);
       const resultSite = textFrom(record, ['staySite', 'travelSite', 'cityName', 'site']);
@@ -272,5 +294,12 @@ export function evaluateTravelRules(snapshot: BoeInspectionSnapshot): RuleEvalua
     results.push(skipped('TRAVELER_CLAIMANT_MISMATCH', 'travel-standard', 'Snapshot 未同时提供出行人员与报账人员，无法比对', ['travel.travelerNames', 'travel.claimantNames']));
   }
 
+  if (!requestsAvailable) results.push(skipped('TRAVEL_STANDARD_REQUEST_MISSING', 'travel-standard', '当前版本未提供标准请求历史，无法检查日期请求覆盖', ['travel.standardRequests']));
+  if (!resultsAvailable) {
+    results.push(skipped('TRAVEL_STANDARD_RESULT_MISSING', 'travel-standard', '当前版本未提供标准结果缓存，无法检查结果覆盖', ['travel.standardResults']));
+    results.push(skipped('TRAVEL_STANDARD_DATE_MISMATCH', 'travel-standard', '当前版本未提供标准结果或请求历史，无法进行日期关联', ['travel.standardResults', 'travel.standardRequests']));
+    results.push(skipped('TRAVEL_STANDARD_KEY_MISS', 'travel-standard', '当前版本未提供可比对的标准结果缓存，无法检查地点与日期命中', ['travel.standardResults']));
+    results.push(skipped('TRAVEL_STANDARD_TYPE_LOST', 'travel-standard', '当前版本未提供标准结果类型，无法检查类型是否丢失', ['travel.standardResults']));
+  }
   return addPassed(results);
 }

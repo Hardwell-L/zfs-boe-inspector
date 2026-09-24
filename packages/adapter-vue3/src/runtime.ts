@@ -55,7 +55,7 @@ export class BoeInspectorRuntime {
   constructor(options: AdapterOptions) {
     this.options = {
       ...options,
-      adapterVersion: options.adapterVersion ?? '0.2.8',
+      adapterVersion: options.adapterVersion ?? '0.2.9',
     };
   }
 
@@ -88,10 +88,12 @@ export class BoeInspectorRuntime {
       };
     });
     const activeInstanceId = this.activeInstanceId(groups);
+    const capabilities = ['continuous-picker', 'area-picker', 'locate-selection',
+      ...(this.options.traceSupported === false ? [] : ['trace', 'trace-values', 'trace-incremental'])];
     return {
       apiVersion: BRIDGE_API_VERSION,
       connected: instances.length > 0,
-      capabilities: ['continuous-picker', 'area-picker', 'locate-selection', 'trace', 'trace-values', 'trace-incremental'],
+      capabilities,
       instances,
       ...(activeInstanceId ? { activeInstanceId } : {}),
     };
@@ -166,7 +168,10 @@ export class BoeInspectorRuntime {
       getStatus: () => this.getStatus(),
       startPicker: (mode, id, options) => this.startPicker(mode, id, options),
       locateSelection: (selection, id) => this.locateSelection(selection, id),
-      startTrace: (id) => this.trace.start(id, this.registrations.flatMap(({ target }) => target ? [target] : [])),
+      startTrace: (id) => {
+        if (this.options.traceSupported === false) throw new Error('当前低版本 Adapter 未启用过程记录');
+        return this.trace.start(id, this.registrations.flatMap(({ target }) => target ? [target] : []));
+      },
       stopTrace: (omitData) => { const session = this.trace.stop(); return omitData ? undefined : session; },
       getTraceUpdate: (cursor) => this.trace.getUpdate(cursor),
       getTrace: () => this.trace.get(),

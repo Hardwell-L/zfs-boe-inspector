@@ -145,6 +145,9 @@ const propertyTabs = computed(() => selectedArea.value ? areaTabs : fieldTabs);
 const activePropertyGroup = computed(() => (selectedArea.value?.groups ?? selectedField.value?.groups)
   ?.find(({ key }) => key === propertyTab.value));
 const travelView = computed(() => buildTravelView(snapshot.value?.travel));
+const legacyPersonRows = computed(() => travelView.value.legacy && travelView.value.person.employeeId
+  ? travelView.value.calendar.filter((row) => row.employeeId === travelView.value.person.employeeId)
+  : []);
 const ruleDiagnostics = computed(() => snapshot.value ? buildRuleDiagnostics(snapshot.value) : undefined);
 const activeRuleModel = computed(() => {
   const model = ruleDiagnostics.value?.[ruleTab.value];
@@ -906,7 +909,7 @@ onBeforeUnmount(() => {
                   <span>{{ item.label }}</span><strong>{{ item.value }}</strong>
                 </div>
               </div>
-              <p class="muted">
+              <p v-if="!travelView.legacy" class="muted">
                 已匹配 {{ travelView.businessSummary.matchedRows }} 行；未匹配 {{ travelView.businessSummary.unmatchedRows }} 行；超标准 {{ travelView.businessSummary.exceededRows }} 行。
               </p>
             </article>
@@ -914,7 +917,7 @@ onBeforeUnmount(() => {
               <article><span>当前人员</span><strong>{{ travelView.person.employeeName || '未识别' }}</strong></article>
               <article><span>行程天数</span><strong>{{ travelView.metrics.travelDays }}</strong></article>
               <article><span>标准条目</span><strong>{{ travelView.metrics.standardCount }}</strong></article>
-              <article><span>请求命中</span><strong>{{ travelView.metrics.matchedRequestCount }}/{{ travelView.metrics.requestCount }}</strong></article>
+              <article><span>请求命中</span><strong v-if="travelView.legacy">未采集历史</strong><strong v-else>{{ travelView.metrics.matchedRequestCount }}/{{ travelView.metrics.requestCount }}</strong></article>
             </div>
 
             <article class="person-card">
@@ -924,9 +927,50 @@ onBeforeUnmount(() => {
               <div><span>岗位 ID</span><strong>{{ travelView.person.postId || '—' }}</strong></div>
             </article>
 
-            <h3>当前人员差旅标准</h3>
+            <template v-if="travelView.legacy">
+              <h3>当前人员逐行差旅标准</h3>
+              <p class="muted">
+                仅展示行内人员 ID 与当前人员一致的记录。页面计算金额来自宿主当前缓存，请求历史及最终超标结论仍待核验。
+              </p>
+              <div v-if="legacyPersonRows.length" class="table-scroll">
+                <table class="data-table">
+                  <thead><tr><th>日期</th><th>地点</th><th>业务类型</th><th>已填金额</th><th>页面计算标准</th><th>依据</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(row, index) in legacyPersonRows" :key="`${row.date}-${index}`">
+                      <td>{{ row.date }}</td><td>{{ row.travelSite }}</td><td>{{ row.businessType || '—' }}</td>
+                      <td>{{ amountValue(row.amount) }}</td><td>{{ amountValue(row.pageStandardAmount) }}</td>
+                      <td>{{ row.pageStandardAmount !== undefined ? '宿主逐日计算，缓存来源待核验' : row.candidateCount ? `${row.candidateCount} 条候选，条件未完整核验` : '暂无可用标准' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-else class="tab-empty">
+                当前行程未提供与当前人员 ID 一致的记录。
+              </p>
+
+              <h3>当前标准查询条件</h3>
+              <p class="muted">
+                这些是当前页面条件，不代表历史请求参数，也不能证明缓存仍与当前人员一致。
+              </p>
+              <pre v-if="snapshot.travel.queryConditions">{{ pretty(snapshot.travel.queryConditions) }}</pre>
+              <p v-else class="tab-empty">
+                当前项目未提供标准查询条件。
+              </p>
+            </template>
+
+            <h3>{{ travelView.legacy ? '已采集的候选标准缓存' : '当前人员差旅标准' }}</h3>
             <div v-if="travelView.standards.length" class="table-scroll">
-              <table class="data-table">
+              <table v-if="travelView.legacy" class="data-table">
+                <thead><tr><th>缓存地点</th><th>标准类型</th><th>金额或限制</th><th>适用条件</th><th>控制方式</th><th>方案 ID/编码</th></tr></thead>
+                <tbody>
+                  <tr v-for="(row, index) in travelView.standards" :key="`${row.key}-${index}`">
+                    <td>{{ row.place }}</td><td>{{ row.standardName }}</td>
+                    <td>{{ row.amount !== undefined ? amountValue(row.amount, row.currency) : row.transportation ? `交通等级：${row.transportation}` : row.standardDiscount ? `折扣：${row.standardDiscount}` : '未提供金额' }}</td>
+                    <td>{{ row.conditions || '—' }}</td><td>{{ row.controlType }}</td><td>{{ row.schemeId || row.schemeCode }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <table v-else class="data-table">
                 <thead><tr><th>日期</th><th>地点</th><th>标准类型</th><th>标准金额</th><th>控制方式</th><th>方案</th></tr></thead>
                 <tbody>
                   <tr v-for="(row, index) in travelView.standards" :key="`${row.key}-${index}`">
@@ -940,14 +984,14 @@ onBeforeUnmount(() => {
               当前人员尚未采集到差旅标准结果。
             </p>
 
-            <h3>当前人员行程</h3>
+            <h3>{{ travelView.legacy ? '已采集的行程明细' : '当前人员行程' }}</h3>
             <div v-if="travelView.calendar.length" class="table-scroll">
               <table class="data-table">
                 <thead><tr><th>日期</th><th>人员</th><th>出差地点</th><th>住宿地点</th><th>金额/补贴</th><th>标准匹配</th><th>超标准</th></tr></thead>
                 <tbody>
                   <tr v-for="(row, index) in travelView.calendar" :key="`${row.date}-${index}`">
                     <td>{{ row.date }}</td><td>{{ row.employeeName }}</td><td>{{ row.travelSite }}</td><td>{{ row.staySite }}</td><td>{{ amountValue(row.amount) }}</td>
-                    <td>{{ row.matchStatus === 'matched' ? amountValue(row.matchedStandardAmount) : row.matchStatus === 'unmatched' ? '未匹配' : '未验证' }}</td>
+                    <td>{{ row.pageStandardAmount !== undefined ? `页面计算 ${amountValue(row.pageStandardAmount)}，待核验` : row.matchStatus === 'candidate' ? `${row.candidateCount} 条候选，待核验` : row.matchStatus === 'matched' ? amountValue(row.matchedStandardAmount) : row.matchStatus === 'unmatched' ? '未匹配' : '未验证' }}</td>
                     <td :class="{ 'text-error': (row.overAmount ?? 0) > 0 }">
                       {{ row.overAmount === undefined ? '—' : amountValue(row.overAmount) }}
                     </td>
@@ -972,8 +1016,13 @@ onBeforeUnmount(() => {
               </table>
             </div>
             <p v-else class="tab-empty">
-              尚未采集到标准请求。
+              {{ travelView.legacy ? '低版本未提供标准请求历史，无法核对请求次数、请求日期和命中情况。' : '尚未采集到标准请求。' }}
             </p>
+
+            <details v-if="travelView.legacy && snapshot.travel.standardDates?.length" class="raw-travel-data">
+              <summary>查看已有逐日标准结果（仅覆盖页面已计算的日期）</summary>
+              <pre>{{ pretty(snapshot.travel.standardDates) }}</pre>
+            </details>
 
             <details class="raw-travel-data">
               <summary>查看原始差旅数据</summary>
@@ -995,6 +1044,7 @@ onBeforeUnmount(() => {
           :instance-id="activeInstanceId"
           :page-id="aiWorkspace.state.source?.pageId || ''"
           :supported="Boolean(status?.capabilities?.includes('trace'))"
+          :legacy-trace-unavailable="snapshot?.instanceId === activeInstanceId && snapshot?.meta.compatibility?.trace === 'unavailable'"
           @update="updateTrace"
           @analyze="analyzeTrace"
         />

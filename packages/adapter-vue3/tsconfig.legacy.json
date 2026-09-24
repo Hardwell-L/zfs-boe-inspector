@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2018",
+    "outDir": "dist/legacy",
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["src/legacyZfsBoe.ts"]
+}

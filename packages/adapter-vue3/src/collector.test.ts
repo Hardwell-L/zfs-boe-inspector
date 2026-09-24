@@ -78,4 +78,22 @@ describe('Travel Collector', () => {
     });
     expect(contribution.travel?.standardDates).toEqual([{ date: '2026-08-01', travelSite: '武汉' }]);
   });
+
+  it('低版本只采集宿主逐日标准金额而不改写原始行程', () => {
+    const original = { expenseDate: '2026-08-01', travelSite: '武汉', employeeId: 'E01', expenseAmount: 120 };
+    const component = {
+      data: { boeHeader: [{ employeeId: 'E01' }], zfsBoeCalendarDTOS: [original] },
+      standardParams: { empId: 'E01' },
+      standardAmount: { 武汉: [{ standardAmount: 100 }] },
+      get calendarData() {
+        return [{ expenseDate: '2026-08-01', travelSite: '武汉', BT01_standard: 100, totalAmount: 120 }];
+      },
+    };
+    const contribution = createTravelCollector(component, { legacyMode: true }).collect();
+    expect(contribution.travel?.calendarData).toEqual([original]);
+    expect(contribution.travel?.calculatedCalendarStandards).toEqual([
+      { expenseDate: '2026-08-01', travelSite: '武汉', BT01_standard: 100 },
+    ]);
+    expect(component.data.zfsBoeCalendarDTOS[0]).toEqual(original);
+  });
 });

@@ -113,7 +113,23 @@ function addPassedResults(results: RuleEvaluation[]): RuleEvaluation[] {
   return results;
 }
 
+function skipUnavailableRules(reason: string): RuleEvaluation[] {
+  return [
+    ...FIELD_RULE_IDS.map((ruleId) => skipped(ruleId, 'field-config', reason)),
+    skipped(
+      'FIELD_TRANS_SOURCE_UNVERIFIED',
+      'field-config',
+      'Snapshot 不包含可用的模板配置，无法确认 trans 是否遗漏源字段',
+    ),
+  ];
+}
+
 export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluation[] {
+  if (snapshot.meta.compatibility?.collection?.status === 'unavailable') {
+    return skipUnavailableRules(
+      '当前项目未提供可用的 bill template，字段规则暂不判定，避免将数据未加载误报为配置缺陷',
+    );
+  }
   const results: RuleEvaluation[] = [];
   const fields = collectFields(snapshot);
   const knownFields = new Set(fields.filter(({ areaCode, fieldCode }) => areaCode && fieldCode)
@@ -191,19 +207,26 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
         { reason: runtimeState.evaluationError },
       ));
     }
+    const runtimeStateAvailable = snapshot.meta.compatibility?.fieldRuntime !== 'unavailable';
     const required = runtimeState?.required
-      ?? booleanValue(field._requireFlag)
-      ?? booleanValue(field.require)
-      ?? booleanValue(field.required);
+      ?? (runtimeStateAvailable
+        ? booleanValue(field._requireFlag)
+          ?? booleanValue(field.require)
+          ?? booleanValue(field.required)
+        : undefined);
     const visible = runtimeState?.visible
-      ?? booleanValue(field._showFlag)
-      ?? booleanValue(field.currentShow)
-      ?? booleanValue(field.isShow);
+      ?? (runtimeStateAvailable
+        ? booleanValue(field._showFlag)
+          ?? booleanValue(field.currentShow)
+          ?? booleanValue(field.isShow)
+        : undefined);
     const editable = runtimeState?.editable
-      ?? booleanValue(field._editFlag)
-      ?? booleanValue(field.currentEdit)
-      ?? booleanValue(field.editable)
-      ?? booleanValue(field.isEdit);
+      ?? (runtimeStateAvailable
+        ? booleanValue(field._editFlag)
+          ?? booleanValue(field.currentEdit)
+          ?? booleanValue(field.editable)
+          ?? booleanValue(field.isEdit)
+        : undefined);
     const currentValue = runtimeState?.value ?? fieldValue(snapshot, areaCode, fieldCode);
     if (required === true && visible === false) {
       results.push(issue(

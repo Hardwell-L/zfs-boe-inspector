@@ -2,13 +2,14 @@ import {
   SNAPSHOT_SCHEMA_VERSION,
   type ApplyBoeEvidenceSnapshot,
   type BoeInspectionSnapshot,
+  type CompatibilityMetadata,
   type FieldPropertyDescriptor,
   type FieldRuntimeState,
   type JsonValue,
   type RuntimeMetadata,
   type TravelInspectionData,
 } from '@zfs-boe-inspector/shared-types';
-import { toSerializable } from './serialize';
+import { toSerializable, type SerializeOptions } from './serialize';
 import type { TraceConditionResolver } from './trace';
 
 export interface AdapterOptions {
@@ -17,6 +18,10 @@ export interface AdapterOptions {
   adapterVersion?: string;
   zfsPackages?: Record<string, string>;
   vueVersion?: string;
+  compatibility?: CompatibilityMetadata;
+  traceSupported?: boolean;
+  legacyMode?: boolean;
+  serialization?: SerializeOptions;
 }
 
 export interface CollectorContribution {
@@ -38,14 +43,18 @@ export interface RuntimeCollector {
 
 export interface BillTemplateComponentLike {
   $parent?: BillTemplateComponentLike | null;
+  $children?: BillTemplateComponentLike[];
+  $el?: unknown;
   $options?: {
     name?: string;
+    _base?: { version?: string };
   };
   $?: {
     type?: {
       name?: string;
     };
   };
+  $root?: BillTemplateComponentLike;
   template?: unknown[];
   data?: Record<string, unknown>;
   billInfo?: Record<string, unknown>;
@@ -66,9 +75,13 @@ export interface BillTemplateCollectorOptions {
     component: BillTemplateComponentLike,
   ) => ApplyBoeEvidenceSnapshot | undefined;
   getTraceConditions?: TraceConditionResolver;
+  compatibility?: CompatibilityMetadata;
+  serialization?: SerializeOptions;
+  legacyMode?: boolean;
 }
 
 export interface TravelComponentLike extends BillTemplateComponentLike {
+  standardParams?: Record<string, unknown>;
   calendarData?: unknown[];
   person?: Record<string, unknown>;
   standardAmount?: Record<string, unknown>;
@@ -84,6 +97,9 @@ export interface TravelCollectorOptions {
   getTrips?: () => unknown[];
   getTravelerNames?: () => string[];
   getClaimantNames?: () => string[];
+  compatibility?: CompatibilityMetadata;
+  serialization?: SerializeOptions;
+  legacyMode?: boolean;
 }
 
 function header(component: BillTemplateComponentLike): Record<string, any> {
@@ -94,11 +110,22 @@ function header(component: BillTemplateComponentLike): Record<string, any> {
     : {};
 }
 
-export function deriveInstanceId(component: BillTemplateComponentLike): string {
+const fallbackIds = new WeakMap<object, string>();
+let fallbackSequence = 0;
+
+export function deriveInstanceId(component: BillTemplateComponentLike, legacyMode = false): string {
   const info = component.billInfo ?? {};
   const row = header(component);
   const boeTypeCode = String(info.boeTypeCode ?? row.boeTypeCode ?? 'UNKNOWN');
-  const billId = row.boeId ?? row.id ?? row.billId ?? row.boeNo ?? 'active';
+  if (!legacyMode) return `${boeTypeCode}:${String(row.boeId ?? row.id ?? row.billId ?? row.boeNo ?? 'active')}`;
+  const billId = info.boeHeaderId ?? info.boeId ?? info.boeNo ?? row.boeId ?? row.id ?? row.billId ?? row.boeNo ?? row.boeHeaderId;
+  if (billId === undefined || billId === null || String(billId).trim() === '') {
+    const existing = fallbackIds.get(component);
+    if (existing) return existing;
+    const generated = `${boeTypeCode}:instance-${++fallbackSequence}`;
+    fallbackIds.set(component, generated);
+    return generated;
+  }
   return `${boeTypeCode}:${String(billId)}`;
 }
 
@@ -218,16 +245,29 @@ export function createBillTemplateCollector(
   const fieldDescriptors = normalizeDescriptors(options.fieldConfig);
   return {
     source: 'bill-template',
-    getInstanceId: () => options.getInstanceId?.() ?? deriveInstanceId(component),
+    getInstanceId: () => options.getInstanceId?.() ?? deriveInstanceId(component, options.legacyMode),
     getBoeTypeCode: () => getMeta(component).boeTypeCode,
     ...(options.getTraceConditions ? { getTraceConditions: options.getTraceConditions } : {}),
     collect: () => {
       const warnings: string[] = [];
+      let compatibility = options.compatibility;
+      if (options.legacyMode && !Array.isArray(component.template)) {
+        warnings.push('bill template 尚未加载，字段配置与字段运行时状态暂不可用');
+        const reasons = [
+          ...(options.compatibility?.collection?.reasons ?? []),
+          'template-not-ready',
+        ];
+        compatibility = {
+          ...(options.compatibility ?? {}),
+          fieldRuntime: 'unavailable',
+          collection: { status: 'unavailable', reasons },
+        };
+      }
       let formattedBoeDto: JsonValue | undefined;
       let formattedDtoStatus: 'available' | 'unavailable' | 'skipped' = 'skipped';
       if (options.getFormattedBoeDto) {
         try {
-          formattedBoeDto = toSerializable(options.getFormattedBoeDto());
+          formattedBoeDto = toSerializable(options.getFormattedBoeDto(), options.serialization);
           formattedDtoStatus = 'available';
         } catch (error) {
           formattedDtoStatus = 'unavailable';
@@ -235,30 +275,30 @@ export function createBillTemplateCollector(
         }
       }
       const runtime: CollectorContribution['runtime'] = {
-        rawBillData: toSerializable(component.data ?? {}),
+        rawBillData: toSerializable(component.data ?? {}, options.serialization),
         formattedDtoStatus,
       };
       if (formattedBoeDto !== undefined) runtime.formattedBoeDto = formattedBoeDto;
       const config: CollectorContribution['config'] = {
-        template: toSerializable(component.template ?? []) as JsonValue[],
+        template: toSerializable(component.template ?? [], options.serialization) as JsonValue[],
       };
       if (areaDescriptors) config.areaDescriptors = areaDescriptors;
       if (fieldDescriptors) config.fieldDescriptors = fieldDescriptors;
-      const fieldRuntimeStates = collectRuntimeStates(component, options.getDynamicConfig);
+      const fieldRuntimeStates = options.legacyMode ? undefined : collectRuntimeStates(component, options.getDynamicConfig);
       if (fieldRuntimeStates) config.fieldRuntimeStates = fieldRuntimeStates;
       let applyBoe: ApplyBoeEvidenceSnapshot | undefined;
       if (options.getApplySnapshot) {
         try {
           const snapshot = options.getApplySnapshot(component);
           if (snapshot) {
-            applyBoe = toSerializable(snapshot) as unknown as ApplyBoeEvidenceSnapshot;
+            applyBoe = toSerializable(snapshot, options.serialization) as unknown as ApplyBoeEvidenceSnapshot;
           }
         } catch (error) {
           warnings.push(`关联申请快照读取失败：${error instanceof Error ? error.message : String(error)}`);
         }
       }
       return {
-        meta: getMeta(component),
+        meta: { ...getMeta(component), ...(compatibility ? { compatibility } : {}) },
         runtime,
         config,
         ...(applyBoe ? { applyBoe } : {}),
@@ -282,6 +322,16 @@ function requestMetadata(component: TravelComponentLike) {
     }
   }
   return requests;
+}
+
+function cacheMode(value: unknown): CompatibilityMetadata['travelCacheMode'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'unknown';
+  const keys = Object.keys(value);
+  if (!keys.length) return 'unknown';
+  const dated = keys.filter((key) => /\d{4}-\d{2}-\d{2}/.test(key));
+  if (dated.length === keys.length) return 'date-site';
+  if (dated.length === 0) return 'site';
+  return 'mixed';
 }
 
 function defaultNames(component: TravelComponentLike, keys: string[]): string[] {
@@ -322,13 +372,15 @@ export function createTravelCollector(
 ): RuntimeCollector {
   return {
     source: 'travel',
-    getInstanceId: () => options.getInstanceId?.() ?? deriveInstanceId(component),
+    getInstanceId: () => options.getInstanceId?.() ?? deriveInstanceId(component, options.legacyMode),
     getBoeTypeCode: () => getMeta(component).boeTypeCode,
     collect: () => {
+      if (options.legacyMode) return collectLegacyTravel(component, options);
+      const requests = requestMetadata(component);
       const travel: TravelInspectionData = {
         trips: toSerializable(options.getTrips?.() ?? component.travelList ?? []) as JsonValue[],
         calendarData: toSerializable(component.calendarData ?? []) as JsonValue[],
-        standardRequests: requestMetadata(component),
+        standardRequests: requests,
         standardResults: toSerializable(component.standardAmount ?? {}) as Record<string, JsonValue>,
         standardDates: toSerializable(component.standardDates ?? []) as JsonValue[],
         standardSummary: toSerializable(component.standardSummary ?? component.summary ?? {}),
@@ -339,6 +391,56 @@ export function createTravelCollector(
       if (person) travel.currentPerson = person;
       return { meta: getMeta(component), travel };
     },
+  };
+}
+
+function collectLegacyTravel(component: TravelComponentLike, options: TravelCollectorOptions): CollectorContribution {
+  const serialize = (value: unknown) => toSerializable(value, options.serialization);
+  const warnings = ['低版本差旅展示现有日历、查询条件与候选标准；请求历史和最终超标结论未验证'];
+  const readOptional = <T>(label: string, read: () => T): T | undefined => {
+    try { return read(); } catch {
+      warnings.push(`${label}读取失败，其余差旅数据仍可查看`);
+      return undefined;
+    }
+  };
+  // 行程保留原始明细；逐日金额另从宿主只读计算结果提取。
+  const calendar = readOptional('日历', () => component.data?.zfsBoeCalendarDTOS ?? component.calendarData);
+  const conditions = readOptional('标准查询条件', () => component.standardParams);
+  // 仅在低版本读取宿主已有的逐日计算结果，不调用会改写单据的校验方法。
+  const calculatedCalendar = Array.isArray(component.data?.zfsBoeCalendarDTOS) && component.standardAmount && conditions
+    ? readOptional('页面逐日标准', () => component.calendarData)
+    : undefined;
+  const calculatedCalendarStandards = Array.isArray(calculatedCalendar) ? calculatedCalendar.flatMap((day) => {
+    if (!day || typeof day !== 'object' || Array.isArray(day)) return [];
+    const record = day as Record<string, unknown>;
+    const amounts = Object.fromEntries(Object.entries(record).filter(([key, value]) =>
+      key.endsWith('_standard') && (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value)))));
+    if (!Object.keys(amounts).length) return [];
+    return [{ expenseDate: record.expenseDate, travelSite: record.travelSite, ...amounts }];
+  }) : [];
+  const travel: TravelInspectionData = {
+    inspectionMode: 'legacy',
+    ...(conditions ? { queryConditions: serialize(conditions) } : {}),
+    ...(component.travelList != null || options.getTrips ? { trips: serialize(options.getTrips?.() ?? component.travelList) as JsonValue[] } : {}),
+    ...(Array.isArray(calendar) ? { calendarData: serialize(calendar) as JsonValue[] } : {}),
+    ...(calculatedCalendarStandards.length ? { calculatedCalendarStandards: serialize(calculatedCalendarStandards) as JsonValue[] } : {}),
+    ...(component.standardAmount != null ? { standardResults: serialize(component.standardAmount) as Record<string, JsonValue> } : {}),
+    ...(component.standardDates != null ? { standardDates: serialize(component.standardDates) as JsonValue[] } : {}),
+    ...(component.standardSummary != null ? { standardSummary: serialize(component.standardSummary) } : {}),
+    ...(component.data?.zfsBoeSumAmounts != null ? { billSummary: serialize(component.data.zfsBoeSumAmounts) } : {}),
+  };
+  const person = readOptional('人员', () => currentPerson(component));
+  if (person) travel.currentPerson = person;
+  return {
+    meta: {
+      ...getMeta(component),
+      compatibility: {
+        travelRequestHistory: 'unavailable',
+        travelCacheMode: cacheMode(travel.standardResults) ?? 'unknown',
+      },
+    },
+    travel,
+    warnings,
   };
 }
 
@@ -364,9 +466,14 @@ export function mergeContributions(
   };
   if (options.zfsPackages) snapshot.meta.zfsPackages = options.zfsPackages;
   if (options.vueVersion) snapshot.meta.vueVersion = options.vueVersion;
+  if (options.compatibility) snapshot.meta.compatibility = options.compatibility;
   for (const collector of collectors) {
     const contribution = collector.collect();
+    const compatibility = contribution.meta?.compatibility
+      ? { ...snapshot.meta.compatibility, ...contribution.meta.compatibility }
+      : snapshot.meta.compatibility;
     Object.assign(snapshot.meta, contribution.meta);
+    if (compatibility) snapshot.meta.compatibility = compatibility;
     Object.assign(snapshot.runtime, contribution.runtime);
     Object.assign(snapshot.config, contribution.config);
     if (contribution.travel) snapshot.travel = contribution.travel;

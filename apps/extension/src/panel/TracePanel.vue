@@ -7,7 +7,10 @@ import { formatLocalDateTime } from './time';
 import { TraceViewCache, mergeTraceUpdate, traceCursor, traceGroups, traceTime } from './traceView';
 import TraceEventCard from './TraceEventCard.vue';
 
-const props = defineProps<{ instanceId: string; supported: boolean; pageId: string; incremental: boolean; valuesSupported: boolean }>();
+const props = defineProps<{ instanceId: string; supported: boolean; pageId: string; incremental: boolean; valuesSupported: boolean; legacyTraceUnavailable?: boolean }>();
+const unsupportedMessage = computed(() => props.legacyTraceUnavailable
+  ? '当前项目处于低版本兼容模式，默认不支持过程记录。'
+  : '当前 Adapter 不支持过程记录，请升级 Adapter。');
 const emit = defineEmits<{
   update: [session: TraceSession | undefined];
   analyze: [eventId: string, selection?: InspectionSelection];
@@ -138,8 +141,8 @@ onBeforeUnmount(() => { disposed = true; generation += 1; cache.clear(); if (tim
   <section class="section trace-panel">
     <h2>过程记录</h2>
     <p>开始记录后，在页面手动复现问题，再停止记录并分析。只观察已接入的方法和页面异常。</p>
-    <DismissibleNotice v-if="!supported" class="warnings">
-      当前 Adapter 不支持过程记录，请升级 Adapter。
+    <DismissibleNotice v-if="!supported" :notice-key="unsupportedMessage" class="warnings">
+      {{ unsupportedMessage }}
     </DismissibleNotice>
     <DismissibleNotice v-if="supported && !valuesSupported" class="warnings">
       当前 Adapter 未声明触发值采集能力。若记录只包含字段名称，请更新业务侧 Adapter、重启业务服务并刷新页面后重新录制；仅更新扩展不会升级页面中的 Adapter。

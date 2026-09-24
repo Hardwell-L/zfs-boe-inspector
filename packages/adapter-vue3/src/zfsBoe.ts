@@ -63,12 +63,20 @@ function resolvedOptions(
   const resolved: AdapterOptions = {
     projectCode: options.projectCode ?? inferredProjectCode(),
     environment: options.environment ?? inferredEnvironment(),
-    adapterVersion: options.adapterVersion ?? '0.2.8',
+    adapterVersion: options.adapterVersion ?? '0.2.9',
     zfsPackages: {
       '@zfs/boe': boePackage.version,
       '@zfs/ui-plus': boePackage.dependencies?.['@zfs/ui-plus'] ?? 'unknown',
       ...options.zfsPackages,
     },
+    compatibility: {
+      profile: 'embedded-core',
+      fieldRuntime: 'complete',
+      trace: 'available',
+      collection: { status: 'complete' },
+    },
+    traceSupported: true,
+    legacyMode: false,
   };
   const resolvedVueVersion = options.vueVersion ?? vueVersion;
   if (resolvedVueVersion) resolved.vueVersion = resolvedVueVersion;
@@ -81,11 +89,13 @@ function registerBillTemplate(
   vueVersion?: string,
 ) {
   if (registrations.has(component)) return;
-  installBoeInspector(resolvedOptions(options, vueVersion));
+  const resolved = resolvedOptions(options, vueVersion);
+  installBoeInspector(resolved);
   const dispose = attachBillTemplateInspector(component, {
     areaConfig,
     fieldConfig,
     getDynamicConfig,
+    ...(resolved.compatibility ? { compatibility: resolved.compatibility } : {}),
     ...(options.getApplySnapshot ? { getApplySnapshot: options.getApplySnapshot } : {}),
     ...(options.getTraceConditions ? { getTraceConditions: options.getTraceConditions } : {}),
   });
@@ -127,8 +137,12 @@ function acquireTravelRegistration(
   getInstanceId?: TravelCollectorOptions['getInstanceId'],
 ): () => void {
   return travelRegistrations.acquire(component, () => {
-    installBoeInspector(resolvedOptions(options, vueVersion));
-    const collectorOptions = getInstanceId ? { getInstanceId } : {};
+    const resolved = resolvedOptions(options, vueVersion);
+    installBoeInspector(resolved);
+    const collectorOptions = {
+      ...(getInstanceId ? { getInstanceId } : {}),
+      ...(resolved.compatibility ? { compatibility: resolved.compatibility } : {}),
+    };
     return attachTravelInspector(component, collectorOptions);
   });
 }
@@ -163,6 +177,9 @@ export function createBillTemplateInspectorMixin(
     beforeUnmount(this: BillTemplateInstance) {
       unregisterBillTemplate(this);
     },
+    beforeDestroy(this: BillTemplateInstance) {
+      unregisterBillTemplate(this);
+    },
   };
 }
 
@@ -194,6 +211,9 @@ export function createTravelInspectorMixin(
       registerTravel(this, options, vueVersion);
     },
     beforeUnmount(this: TravelInstance) {
+      unregisterTravel(this);
+    },
+    beforeDestroy(this: TravelInstance) {
       unregisterTravel(this);
     },
   };
