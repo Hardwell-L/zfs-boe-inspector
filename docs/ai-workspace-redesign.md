@@ -257,7 +257,7 @@ AI 分析                       模型 deepseek… · 范围 3 项 · 采集 202
 ## 9. 前轮回退与设计记录（保留）
 
 - 以 `6c512cd` 恢复 `AiPanel.vue`、`App.vue`、`TracePanel.vue`、`aiClient.ts`、`styles.css`，移除此前改版新增的 `time.ts`。未回退 Git 提交历史。
-- 原改版源码及旧设计文档备份于 `/private/tmp/zfs-ai-redesign-rollback-l7l73cgw`，属于临时恢复副本，不是项目交付内容。
+- 原改版源码及旧设计文档曾保留临时恢复副本，该副本不是项目交付内容。
 - 保留原有 README 发布说明改动和产品说明 Word 文件。
 - 2026-09-17：执行 `pnpm exec eslint apps/extension/src/panel/AiPanel.vue apps/extension/src/panel/App.vue apps/extension/src/panel/TracePanel.vue apps/extension/src/panel/aiClient.ts`，退出码 0。检查对象为恢复至 `6c512cd` 的四个 Vue/TypeScript 文件；现有 ESLint 未配置 CSS/Markdown 检查。
 - `git diff --check` 通过；五个恢复文件与基线逐字节一致，HEAD 未变；README 和 Word 文件回退前后 SHA-256 一致。另核对了设计文档的 Markdown 围栏与验收编号。以上只证明回退及文档整理结果，不代表新设计已实现。

@@ -1,6 +1,6 @@
 # BOE 低版本兼容改造设计
 
-状态：设计与首轮代码实现同步维护。日期：2026-09-22。修订：补充奇瑞 1.0 系列、时代新材 3.7，明确低版本不追求功能对齐，以兼容性、只读性和有限开销为先。
+状态：设计与首轮代码实现同步维护。日期：2026-09-22。修订：补充 1.x 系列样本、3.7 样本，明确低版本不追求功能对齐，以兼容性、只读性和有限开销为先。
 
 当前首轮代码已实现入口隔离、Vue2 Mixin 生命周期、基础模板/原始数据采集、快照兼容元数据、序列化预算和低版本规则跳过；3.x 的 `boeDesign` 分组与旧版动态状态读取仍按设计保留为后续增量，不在本轮宣称已启用。
 
@@ -10,7 +10,7 @@
 
 本次目标是以局部改动接入已提供的 BOE 1.0 系列、2.x、3.3、3.7 项目，同时保留 4.2 Vue3 的现有能力。低版本不要求具备高版本全部功能：先保证安装、页面运行、基础字段检查和卸载清理，再按已验证的能力开放增强功能。不能为补齐功能引入高开销遍历、额外业务请求或隐含依赖。
 
-**最高兼容约束：本次改造不得影响高版本现有功能、默认行为和接入方式。低版本方案与此冲突时，应收缩或调整低版本方案，不能以高版本功能降级作为代价。** 此处高版本指当前已支持的 BOE/Vue3 项目，以联投 4.2 作为已核实的回归样本，不据此宣称所有未来版本都已验证。
+**最高兼容约束：本次改造不得影响高版本现有功能、默认行为和接入方式。低版本方案与此冲突时，应收缩或调整低版本方案，不能以高版本功能降级作为代价。** 此处高版本指当前已支持的 BOE/Vue3 项目，以 4.2 样本作为已核实的回归对象，不据此宣称所有未来版本都已验证。
 
 以下内容是实施设计，不代表已发布的 API 或已通过的兼容性验证。
 
@@ -64,56 +64,48 @@ export default {
 - 共用 Runtime、协议、规则、序列化或面板必须改动时，采用可选增量与分支隔离，并验证新扩展读取旧高版本 Adapter、新高版本 Adapter 被已有支持客户端读取的行为。
 - 任一高版本回归未通过，或者尚未执行必要验证，均不能宣布“兼容完成”或发布推广。优先撤回造成回归的低版本改动，不要求用户接受高版本降级。
 
-## 2. 已核实的项目证据
+## 2. 已核实的匿名样本证据
 
 | 样本 | 版本证据 | BOE 布局 | 构建工具 |
 | --- | --- | --- | --- |
-| 奇瑞（用户标识为 1.0 系列） | 项目 manifest 为 `2.1.4`；声明 Vue `^2.6.11`，安装 `2.7.16` | BOE 源码位于项目 `src/components/pages`；无 `@zfs` 依赖，未发现 `boeDesign` 描述入口 | Vue CLI 4，webpack `4.47.0` |
-| 绝味 | 项目版本 `2.1.6`；安装 Vue `2.6.12` | BOE 源码位于项目 `src/components/pages`；没有 `@zfs/boe`、`@zfs/boe-core` | Vue CLI 4，webpack `4.44.2` |
-| 中车电机 | `@zfs/boe`、`@zfs/boe-core` 均为 `3.3.12`；声明 Vue `^2.6.12`，安装 `2.7.16` | 独立 `@zfs/boe-core` 包 | Vue CLI 4，webpack `4.47.0` |
-| 时代新材 3.7 | 项目 manifest 为 `3.7.5`；安装 BOE/core `3.7.11`、Vue `2.6.14` | 独立 `@zfs/boe-core` 包 | Vue CLI 4，webpack `4.46.0` |
-| 湖北联投 4.2 | `@zfs/boe` 为 `4.2.0-6.4`；安装 Vue `3.5.39` | 核心源码位于 `@zfs/boe/zfs-boe-core` | Vue CLI 5，webpack `5.89.0` |
+| 1.x 系列样本 | 项目 manifest 为 `2.1.4`；声明 Vue `^2.6.11`，安装 `2.7.16` | 本地 BOE 源码；无 `@zfs` 依赖，未发现 `boeDesign` 描述入口 | Vue CLI 4，webpack `4.47.0` |
+| 2.x 样本 | 项目版本 `2.1.6`；安装 Vue `2.6.12` | 本地 BOE 源码；没有 `@zfs/boe`、`@zfs/boe-core` | Vue CLI 4，webpack `4.44.2` |
+| 3.3 样本 | `@zfs/boe`、`@zfs/boe-core` 均为 `3.3.12`；声明 Vue `^2.6.12`，安装 `2.7.16` | 独立 `@zfs/boe-core` 包 | Vue CLI 4，webpack `4.47.0` |
+| 3.7 样本 | 项目 manifest 为 `3.7.5`；安装 BOE/core `3.7.11`、Vue `2.6.14` | 独立 `@zfs/boe-core` 包 | Vue CLI 4，webpack `4.46.0` |
+| 4.2 回归样本 | `@zfs/boe` 为 `4.2.0-6.4`；安装 Vue `3.5.39` | 核心源码内嵌于 `@zfs/boe` | Vue CLI 5，webpack `5.89.0` |
 
-证据目录：
+“1.x 系列”是业务版本标识，`2.1.4` 是该样本项目 manifest 值，两者不强行等同。探测器因没有 `@zfs` 包将该样本标为 `non-zfs`，但其本地 BOE 组件契约已通过源码核对；基础适配不能以是否安装 `@zfs` 包作为唯一准入条件。
 
-- 奇瑞：`/Users/mac/Documents/work/project/奇瑞/boe`。
-- 绝味：`/Users/mac/Documents/work/project/绝味/boe`。
-- 中车电机：`/Users/mac/Documents/work/project/中车电机/zfs-boe-prj`。
-- 时代新材：`/Users/mac/Documents/work/project/时代新材/时代新材3.7升级/zfs-boe-prj`。
-- 湖北联投：`/Users/mac/Documents/work/project/湖北联投/联投4.2.0/zfs-boe-prj`。
+核对的结构差异：
 
-“奇瑞 1.0”保留为用户提供的系列标识，`2.1.4` 是当前 checkout 的项目 manifest 值，两者不强行等同。探测器因没有 `@zfs` 包将该项目标为 `non-zfs`，但其本地 BOE 组件契约已通过源码核对；基础适配不能以是否安装 `@zfs` 包作为唯一准入条件。
-
-核对的关键位置：
-
-| 内容 | 绝味 2.x | 中车电机 3.x |
+| 内容 | 2.x 样本 | 3.3 样本 |
 | --- | --- | --- |
-| 接入组件 | `src/components/pages/template/billTemplate.vue` | `src/components/billTemplate.vue` |
-| 配置描述 | `src/components/pages/config/boeDesign/index.js` | `node_modules/@zfs/boe-core/src/config/boeDesign/index.js` |
-| 字段状态与 DOM | `src/components/pages/template/{billField,billTd,areaRow}.vue` | 本地 `src/components/{billField,areaRow}.vue` 及其继承的上游组件 |
-| 差旅宿主 | `src/components/pages/boeType/NEW_TRAVEL_BOE.vue` | `src/boeType/NEW_TRAVEL_BOE.vue` 及上游组件 |
+| 接入组件 | 本地 `billTemplate` wrapper | 本地 `billTemplate` wrapper |
+| 配置描述 | 本地 `boeDesign` 模块 | 独立核心包的 `boeDesign` 模块 |
+| 字段状态与 DOM | 本地 `billField`、`billTd`、`areaRow` 组件 | 本地字段/区域组件及其继承的上游组件 |
+| 差旅宿主 | 本地 `NEW_TRAVEL_BOE` 组件 | 本地差旅组件及上游组件 |
 
-新增样本的关键证据：
+其他样本的关键证据：
 
-| 样本 | 位置 | 发现 |
+| 样本 | 核对范围 | 发现 |
 | --- | --- | --- |
-| 奇瑞 | `src/components/pages/template/billTemplate.vue:232` | 仍有 `template`、`data`、`billInfo`、`billStatus` props，另有 `allTemplate` |
-| 奇瑞 | `src/components/pages/template/billField.vue:459`、`billTd.vue:99` | 仍生成 `区域.行号.字段` ID |
-| 奇瑞 | `src/components/pages/config/fieldInfo.js` | 按 main/add/cost 等区域组织的字段定义，不是按字段类型组织的属性描述数组 |
-| 奇瑞 | `src/components/pages/boeType/TRAVEL_BOE.vue:43` | 直接引用本地 billTemplate，行级差旅逻辑不等于新版 calendar/cache 模型 |
-| 奇瑞 | `src/components/pages/mixins/initBillData.js:233` | 单据身份写入 `billInfo.boeHeaderId`；模板切换期间会临时设为 null |
-| 时代新材 | `src/components/billTemplate.vue:723`、`src/boeType/NEW_TRAVEL_BOE.vue:10` | 从独立核心继承，本地差旅 wrapper 引用本地 billTemplate |
-| 时代新材 | `node_modules/@zfs/boe-core/src/config/boeDesign/index.js` | 有 `areaConfig`、`fieldConfig`；目标核心中未发现 `fieldDynamicConfig` 文件 |
-| 时代新材 | `node_modules/@zfs/boe-core/src/mixins/initBillData.js:627` | `getStandardAmount` 有日期时写入 `地点_日期`，无日期时写入地点键，存在混合缓存可能 |
-| 时代新材 | `node_modules/@zfs/boe/src/boeType/NEW_TRAVEL_BOE.vue:433` | 有 `standardAmount`、`standardDates`；对核心、差旅源码和本地差旅的检索未发现 `standardAmountParamsObj` |
+| 1.x 系列样本 | 模板组件 | 仍有 `template`、`data`、`billInfo`、`billStatus` props，另有 `allTemplate` |
+| 1.x 系列样本 | 字段与单元格组件 | 仍生成 `区域.行号.字段` ID |
+| 1.x 系列样本 | 字段定义 | 按 main/add/cost 等区域组织，不是按字段类型组织的属性描述数组 |
+| 1.x 系列样本 | 差旅组件 | 直接引用本地 billTemplate，行级差旅逻辑不等于新版 calendar/cache 模型 |
+| 1.x 系列样本 | 单据初始化逻辑 | 单据身份写入 `billInfo.boeHeaderId`；模板切换期间会临时设为 null |
+| 3.7 样本 | 本地模板和差旅组件 | 从独立核心继承，本地差旅 wrapper 引用本地 billTemplate |
+| 3.7 样本 | 独立核心的配置模块 | 有 `areaConfig`、`fieldConfig`；目标核心中未发现 `fieldDynamicConfig` 文件 |
+| 3.7 样本 | 独立核心的初始化逻辑 | `getStandardAmount` 有日期时写入 `地点_日期`，无日期时写入地点键，存在混合缓存可能 |
+| 3.7 样本 | 上游差旅组件 | 有 `standardAmount`、`standardDates`；对核心、差旅源码和本地差旅的检索未发现 `standardAmountParamsObj` |
 
 已确认：
 
 1. 四个老项目仍提供 `template`、`data`、`billInfo`、`billStatus`，基础采集契约可以复用。
-2. 绝味、两个 3.x 项目有 `areaConfig`、`fieldConfig` 描述；奇瑞不具备相同描述入口，只承诺原始配置展示。
+2. 2.x 样本和两个 3.x 样本有 `areaConfig`、`fieldConfig` 描述；1.x 系列样本不具备相同描述入口，只承诺原始配置展示。
 3. 字段 ID 仍使用 `areaCode.rowIndex.fieldCode`，`table-search` 使用 `labelCode`。
 4. 老版本动态字段逻辑分布于组件和 `NANDgate` 调用，不能直接使用当前新版 `fieldDynamicConfig` 导入路径。
-5. 绝味和中车电机存在按地点存储的 `standardAmount`；时代新材 3.7 可同时出现地点键和地点＋日期键。这些已检索的低版本来源未发现新版 `standardAmountParamsObj`，不能因支持日期缓存就宣称有请求历史。
+5. 2.x 样本和 3.3 样本存在按地点存储的 `standardAmount`；3.7 样本可同时出现地点键和地点＋日期键。这些已检索的低版本来源未发现新版 `standardAmountParamsObj`，不能因支持日期缓存就宣称有请求历史。
 6. 老项目生产配置将 Vue external 到页面 `Vue`，本地安装版本不一定等于生产页面实际版本。
 
 尚未确认：其他 1.x、2.x、3.x、4.2 以下发行版是否全部遵循这些契约；所有单据类型的接入覆盖；真实页面中的状态采集完整性和耗时。不能仅依据版本号扩大支持承诺，也不能把本次静态检查描述为已完成性能验证。
@@ -156,8 +148,8 @@ export default {
 | --- | --- | --- |
 | 新版内嵌核心 | `@zfs/boe/zfs-boe-core/src/config/boeDesign` | 对应模块存在且导出契约有效 |
 | 旧版独立核心 | `@zfs/boe-core/src/config/boeDesign` | 对应模块存在且导出契约有效 |
-| 旧版本地源码 | `@/components/pages/config/boeDesign` | 项目已有 `@ → src` 别名且文件存在 |
-| 仅运行时契约 | 不导入额外配置模块 | 前述描述不可用，但组件有有效模板和数据；奇瑞属于此类 |
+| 旧版本地源码 | 本地 `boeDesign` 模块 | 项目已有对应模块且文件存在 |
+| 仅运行时契约 | 不导入额外配置模块 | 前述描述不可用，但组件有有效模板和数据；1.x 系列样本属于此类 |
 
 按上述顺序探测，并结合 Vue 实例检查是否与支持的组合一致。模块存在但初始化失败、结构不符或版本组合异常时应记录原因，不静默冒充另一个已支持来源。
 
@@ -165,7 +157,7 @@ export default {
 
 配置描述不可用时，仍可读取最终模板和原始属性；分组标签不足应显示降级提示，不阻断基础 Bridge。
 
-不为了奇瑞新增多个文件探测路径，不把 `config/fieldInfo.js` 强行转换为 designer 属性描述。无需精确 BOE 版本或完整描述表也能使用基础功能。描述来源识别和功能开放分开，`standalone-core` 不代表相同差旅算法。
+不为 1.x 系列样本新增多个文件探测路径，不把本地字段定义强行转换为 designer 属性描述。无需精确 BOE 版本或完整描述表也能使用基础功能。描述来源识别和功能开放分开，`standalone-core` 不代表相同差旅算法。
 
 ### 4.3 构建入口隔离
 
@@ -195,9 +187,9 @@ export default {
 
 继续采集组件最终的 `template` 和 `data`，不重复请求模板接口，不调用 `dataFormat`。配置描述按实际宿主来源读取并沿用现有净化逻辑，不复制整套 designer。
 
-有对应包时记录真实包版本；奇瑞、绝味无 `@zfs/boe` 时不伪造该包的版本。保留 `projectCode` 默认来自页面 host 的行为。项目 `package.json.version` 与 BOE 包版本属于不同含义，不互相代替。
+有对应包时记录真实包版本；1.x 系列样本、2.x 样本无 `@zfs/boe` 时不伪造该包的版本。保留 `projectCode` 默认来自页面 host 的行为。项目 `package.json.version` 与 BOE 包版本属于不同含义，不互相代替。
 
-基础采集还需兼容奇瑞的模板暂时为 null，以及 `billInfo.boeHeaderId`、`billInfo.boeNo` 身份来源。模板尚未就绪时不输出“字段缺失”问题，不改读 `allTemplate` 冒充当前模板。身份优先使用已确认的业务 ID；尚无 ID 的多个新建单据使用组件实例级稳定后备标识，不全部合并到 `UNKNOWN:active`。现有业务 ID 的优先级不变，身份变化时同步清理选择和过程记录状态，避免跨单据缓存复用。
+基础采集还需兼容 1.x 系列样本的模板暂时为 null，以及 `billInfo.boeHeaderId`、`billInfo.boeNo` 身份来源。模板尚未就绪时不输出“字段缺失”问题，不改读 `allTemplate` 冒充当前模板。身份优先使用已确认的业务 ID；尚无 ID 的多个新建单据使用组件实例级稳定后备标识，不全部合并到 `UNKNOWN:active`。现有业务 ID 的优先级不变，身份变化时同步清理选择和过程记录状态，避免跨单据缓存复用。
 
 ### 5.2 字段动态状态
 
@@ -222,7 +214,7 @@ Vue3 保留已确认的现有采集分支。Vue2 基础模式默认不执行全�
 
 继续从已接入 `billTemplate` 的父级链发现已知差旅宿主，复用现有共享注册池。父链名称或结构经过定制时继续使用已有 `resolveTravelComponent`。
 
-宿主名称匹配后仍需检查数据契约；奇瑞虽叫 `TRAVEL_BOE`，不能因此注册一个全部为空的新版 Travel Snapshot 再让规则补出 passed。缺少可确认的差旅模型时，不注册专用差旅 Collector，单据中的 travel/stay/subsidy 等区域仍可作为普通字段查看。
+宿主名称匹配后仍需检查数据契约；1.x 系列样本虽叫 `TRAVEL_BOE`，不能因此注册一个全部为空的新版 Travel Snapshot 再让规则补出 passed。缺少可确认的差旅模型时，不注册专用差旅 Collector，单据中的 travel/stay/subsidy 等区域仍可作为普通字段查看。
 
 | 数据或规则 | 老版处理 |
 | --- | --- |
@@ -233,7 +225,7 @@ Vue3 保留已确认的现有采集分支。Vue2 基础模式默认不执行全�
 | 请求缺失、按日期结果缺失、日期关联和日期＋地点命中 | 前置能力不足时逐规则 `skipped` |
 | 类型、汇总、去重和控制等级 | 仅对已确认具有对应语义的证据执行，否则跳过 |
 
-中车电机 3.3 样本取地点末段作为缓存键，绝味 2.x 样本直接使用地点值；时代新材 3.7 的上游 `getStandardAmount` 按是否传入日期写入两种键，可能形成混合缓存。不能写死“Vue2＝地点缓存”，也不能写死“独立核心＝同一种缓存”。首次实施保留原始键和值；混合或不明语义的键策略标记为 `mixed` / `unknown`，依赖全局统一键规则的诊断跳过。即使有日期缓存，缺少请求历史的相关规则仍须跳过。
+3.3 样本取地点末段作为缓存键，2.x 样本直接使用地点值；3.7 样本的上游 `getStandardAmount` 按是否传入日期写入两种键，可能形成混合缓存。不能写死“Vue2＝地点缓存”，也不能写死“独立核心＝同一种缓存”。首次实施保留原始键和值；混合或不明语义的键策略标记为 `mixed` / `unknown`，依赖全局统一键规则的诊断跳过。即使有日期缓存，缺少请求历史的相关规则仍须跳过。
 
 不调用 `getStandardAmount`、`checkStandard`、`beforeSubmit`，不为填补快照而发起业务请求。缓存和请求容器已经存在但当前为空，与该版本根本不提供容器是两种状态。
 
@@ -289,11 +281,11 @@ Vue3 保留现有可撤销方法观察机制。低版本基础模式不安装方
 
 | 样本 | 基础模板与字段值 | 原生描述分组 | 差旅 | 深度运行态／过程记录 |
 | --- | --- | --- | --- | --- |
-| 奇瑞 1.0 系列 | 优先支持；补身份后备和模板空态 | 不要求；使用原始属性 | 不要求新版专用诊断；按普通区域查看 | 默认关闭，可暂不实现 |
-| 绝味 2.x | 优先支持 | 可加载时提供 | 读取已确认的地点缓存；缺请求历史则跳过对应规则 | 默认关闭 |
-| 中车电机 3.3 | 优先支持 | 可加载时提供 | 读取已确认的地点缓存与日历 | 默认关闭 |
-| 时代新材 3.7 | 优先支持 | 可加载时提供 | 保留日期／地点／混合缓存；不补造请求历史 | 默认关闭 |
-| 湖北联投 4.2 | 保持既有能力 | 保持既有能力 | 保持既有已支持能力 | 保持既有按需使用方式 |
+| 1.x 系列样本 | 优先支持；补身份后备和模板空态 | 不要求；使用原始属性 | 不要求新版专用诊断；按普通区域查看 | 默认关闭，可暂不实现 |
+| 2.x 样本 | 优先支持 | 可加载时提供 | 读取已确认的地点缓存；缺请求历史则跳过对应规则 | 默认关闭 |
+| 3.3 样本 | 优先支持 | 可加载时提供 | 读取已确认的地点缓存与日历 | 默认关闭 |
+| 3.7 样本 | 优先支持 | 可加载时提供 | 保留日期／地点／混合缓存；不补造请求历史 | 默认关闭 |
+| 4.2 回归样本 | 保持既有能力 | 保持既有能力 | 保持既有已支持能力 | 保持既有按需使用方式 |
 
 ## 6. 最小协议增量与新旧版本组合
 
@@ -328,7 +320,7 @@ Vue3 保留现有可撤销方法观察机制。低版本基础模式不安装方
 2. modern/legacy 分别编译，legacy 目标为 ES2018；不在统一入口放置跨版本可选 `require`，避免高版本新增缺失模块 warning。
 3. 对 `shared-types` 的实际运行时产物一并检查。降级语法不引入全局 polyfill，现代浏览器 API 仍受现有 Chrome 版本约束。
 4. Vue peer 建议覆盖 `>=2.6.0 <3 || >=3.4.0 <4`，不意外扩大到未经评估的 Vue3.0～3.3。版本范围是安装约束，不等于该范围全部发行版已验收。
-5. `@zfs/boe` peer 放宽到所需系列并继续 optional；独立 `@zfs/boe-core` 如声明 peer，也必须 optional。奇瑞、绝味无这些包时不能自动安装它们；奇瑞没有任何 `@zfs` 包也可使用基础模式。
+5. `@zfs/boe` peer 放宽到所需系列并继续 optional；独立 `@zfs/boe-core` 如声明 peer，也必须 optional。1.x 系列样本、2.x 样本无这些包时不能自动安装它们；1.x 系列样本没有任何 `@zfs` 包也可使用基础模式。
 6. Adapter 与 `shared-types` 当前 `node >=22.12.0` 声明需要与宿主消费要求分离。优先移除没有实际运行时依据的消费端限制；若必须声明下限，依据验证结果确定。仓库构建工具的 Node 要求不变。
 7. 发布包不增加 postinstall；不要求 `--force`、`--legacy-peer-deps`，不夹带 Vue 运行时副本。
 8. 优先沿用 TypeScript 和已有脚本完成转译、复制入口与打包，不先引入新的 bundler 或 `vue-demi`。
@@ -355,17 +347,17 @@ Vue3 保留现有可撤销方法观察机制。低版本基础模式不安装方
 
 先完成物理入口、兼容加载、依赖范围和发布语法；使用实际 tarball 验证五个样本工具链对同一 import 的处理。明确记录可选依赖 warning、新增依赖图与体积、production external Vue 和旧 Node 消费限制。
 
-通过条件：五个样本无需改构建配置即可解析入口，Vue2.6 不因 Vue3 API 导入失败，缺失其他布局的模块不形成必需依赖，奇瑞无配置描述也可进入基础模式。若不通过，停止扩大实现范围并修订入口方案。
+通过条件：五个样本无需改构建配置即可解析入口，Vue2.6 不因 Vue3 API 导入失败，缺失其他布局的模块不形成必需依赖，1.x 系列样本无配置描述也可进入基础模式。若不通过，停止扩大实现范围并修订入口方案。
 
 ### 第二阶段：生命周期和基础采集
 
 接入实际 billTemplate，验证可用的配置描述、最终模板、数据、身份、空态和注销；保留 Vue3 Mixin 与 setup 两条路径。单独核对哪些单据真正使用被修改的组件。
 
-中车电机的 `TRAVEL_BOE`、`NEW_TRAVEL_BOE` 已引用本地 billTemplate；`MULTI_TRAVEL_BOE` 的本地 wrapper 没有注册它，需要沿实际组件链确认并在必要处补注册，不能声称一个文件天然覆盖所有单据。
+3.3 样本的 `TRAVEL_BOE`、`NEW_TRAVEL_BOE` 已引用本地 billTemplate；`MULTI_TRAVEL_BOE` 的本地 wrapper 没有注册它，需要沿实际组件链确认并在必要处补注册，不能声称一个文件天然覆盖所有单据。
 
 ### 第三阶段：定位、预算与诊断降级
 
-补可确认的旧区域定位、基础采集预算、能力元数据及防误报规则。奇瑞不补做 designer 和新版差旅模型，所有低版本不以全量字段运行态或过程记录作为通过条件。能力缺失与截断提示、导出同时完成，避免仅做到“已连接”就宣布兼容。
+补可确认的旧区域定位、基础采集预算、能力元数据及防误报规则。1.x 系列样本不补做 designer 和新版差旅模型，所有低版本不以全量字段运行态或过程记录作为通过条件。能力缺失与截断提示、导出同时完成，避免仅做到“已连接”就宣布兼容。
 
 ### 第四阶段：版本回归与发布说明
 
@@ -384,11 +376,11 @@ Vue3 保留现有可撤销方法观察机制。低版本基础模式不安装方
 | Vue | Vue2.6、Vue2.7、Vue3 | Mixin 均可注册；Vue3 setup 保持可用；Vue2.6 import 不触发缺失 API |
 | 生产模式 | Vue external 到 CDN | 按页面实际运行时工作，不依赖仅开发环境存在的导出 |
 | 生命周期 | 进入、离开、重复进入单据、keep-alive、多个新建单据 | 注册与释放匹配；缓存页恢复不重复注册，非活动实例不参与当前采集；无业务 ID 的实例不合并 |
-| 基础采集 | 普通单据、差旅单据、奇瑞模板暂时为 null | 最终模板、数据和可用描述与页面一致；未就绪不误报，无描述不阻断 |
+| 基础采集 | 普通单据、差旅单据、1.x 系列样本模板暂时为 null | 最终模板、数据和可用描述与页面一致；未就绪不误报，无描述不阻断 |
 | 覆盖 | 各单据实际组件链 | 确认接入点覆盖，未覆盖的单据明确列出 |
 | 动态状态 | 默认模式以及可选增强启用后的审批、折叠、分页等场景 | 默认不扫描、不伪造状态；若实现增强则尊重实际状态，未挂载不推断隐藏 |
 | 定位 | 普通字段、table-search、明细、隐藏标题区域、多单据 | 选择和定位一致；仅作用于当前实例，不能唯一定位则失败 |
-| 差旅 | 地点缓存、3.7 混合缓存、奇瑞无新版模型、存在但为空的请求容器 | 不虚构日期请求；无能力不制造全 passed；缺证据规则明确 skipped |
+| 差旅 | 地点缓存、3.7 混合缓存、1.x 系列样本无新版模型、存在但为空的请求容器 | 不虚构日期请求；无能力不制造全 passed；缺证据规则明确 skipped |
 | 过程记录 | 基础模式和另行验证的可选增强 | 默认无方法包装；未实现可以标记未支持；已实现的增强停止后恢复原方法 |
 | 只读边界 | 刷新快照、选择、诊断 | 不增加业务 Network 请求，不修改单据、缓存和配置 |
 | 协议 | 新扩展读取旧快照及新旧 Adapter | 缺少新字段时正确回退；未知与空值区分；导出和 AI 保留限制 |
@@ -428,7 +420,7 @@ Vue3 保留现有可撤销方法观察机制。低版本基础模式不安装方
 - [现有项目接入](project-integration.md)
 - [现有架构](architecture.md)
 - [Snapshot 与 Bridge 协议](snapshot-protocol.md)
-- [湖北联投 4.2.0 证据](evidence-hblt-4.2.0.md)
+- [BOE 4.2 Vue3 接入证据](evidence-boe-4.2.md)
 - [当前 Adapter 入口](../packages/adapter-vue3/src/zfsBoe.ts)
 - [当前采集器](../packages/adapter-vue3/src/collector.ts)
 - [当前差旅规则](../packages/rule-base/src/travelRules.ts)

@@ -202,7 +202,7 @@ examples/vue3-boe-integration  真实项目接入片段
 - [Snapshot 协议](docs/snapshot-protocol.md)
 - [规则开发](docs/rule-development.md)
 - [项目接入](docs/project-integration.md)
-- [湖北联投 4.2.0 证据记录](docs/evidence-hblt-4.2.0.md)
+- [BOE 4.2 Vue3 接入证据](docs/evidence-boe-4.2.md)
 - [发布流程](docs/release.md)
 
 ## 首版边界

@@ -8,7 +8,7 @@ npm install @zfs-boe-inspector/adapter-vue3
 
 ## 1. Options API / Mixin
 
-适用于现有 BOE 项目，也是湖北联投 4.2.0 当前采用的方式。在 local `billTemplate.vue` 中增加一个 Mixin：
+适用于现有 BOE 项目。在 local `billTemplate.vue` 中增加一个 Mixin：
 
 ```javascript
 import { createBillTemplateInspectorMixin } from '@zfs-boe-inspector/adapter-vue3/zfs-boe';
@@ -52,7 +52,7 @@ Mixin 和 Composable 均可零参数使用，并自动读取：
 
 ```javascript
 createBillTemplateInspectorMixin({
-  projectCode: 'hblt-zfs-boe-prj',
+  projectCode: 'your-project-code',
 });
 ```
 

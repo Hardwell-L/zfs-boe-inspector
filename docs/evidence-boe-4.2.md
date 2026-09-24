@@ -1,6 +1,6 @@
-# 湖北联投 4.2.0 接入证据
+# BOE 4.2 Vue3 接入证据（匿名样本）
 
-目标项目：`/Users/mac/Documents/work/project/湖北联投/联投4.2.0/zfs-boe-prj`
+样本类型：BOE 4.2 / Vue3。
 
 ## 版本和构建
 
@@ -8,11 +8,11 @@
 - `@zfs/boe`：`4.2.0-6.4`。
 - `@zfs/ui-plus`：`4.2.0-6.4`。
 - 项目语言：JavaScript；构建工具：Vue CLI/webpack。
-- 本地 wrapper：`src/components/billTemplate.vue`、`src/boeType/NEW_TRAVEL_BOE.vue`。
+- 本地 wrapper：`billTemplate` 和 `NEW_TRAVEL_BOE`。
 
 ## 最终模板来源
 
-依赖源码 `zfs-boe-core/src/mixins/getBillTemplate.js` 的 `getTemplate()` 会分别获取子模板和父模板，再调用 `combineTemplate()`。`initBillData.js` 随后执行：
+依赖中的 `getBillTemplate` 实现的 `getTemplate()` 会分别获取子模板和父模板，再调用 `combineTemplate()`。`initBillData.js` 随后执行：
 
 ```text
 getTemplate
