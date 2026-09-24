@@ -22,6 +22,7 @@ import {
 } from './index';
 import { SharedRegistrationPool } from './sharedRegistration';
 import { findTravelOwner } from './travelOwner';
+import { isSupportedBoeVersion } from './boeVersion';
 
 declare const process: { env?: { NODE_ENV?: string } } | undefined;
 
@@ -63,7 +64,7 @@ function resolvedOptions(
   const resolved: AdapterOptions = {
     projectCode: options.projectCode ?? inferredProjectCode(),
     environment: options.environment ?? inferredEnvironment(),
-    adapterVersion: options.adapterVersion ?? '0.2.9',
+    adapterVersion: options.adapterVersion ?? '0.2.10',
     zfsPackages: {
       '@zfs/boe': boePackage.version,
       '@zfs/ui-plus': boePackage.dependencies?.['@zfs/ui-plus'] ?? 'unknown',
@@ -88,7 +89,7 @@ function registerBillTemplate(
   options: ZfsBoeInspectorOptions,
   vueVersion?: string,
 ) {
-  if (registrations.has(component)) return;
+  if (!isSupportedBoeVersion(boePackage.version) || registrations.has(component)) return;
   const resolved = resolvedOptions(options, vueVersion);
   installBoeInspector(resolved);
   const dispose = attachBillTemplateInspector(component, {
@@ -152,7 +153,7 @@ function registerTravel(
   options: ZfsBoeInspectorOptions,
   vueVersion?: string,
 ) {
-  if (directTravelReleases.has(component)) return;
+  if (!isSupportedBoeVersion(boePackage.version) || directTravelReleases.has(component)) return;
   directTravelReleases.set(
     component,
     acquireTravelRegistration(component, options, vueVersion),

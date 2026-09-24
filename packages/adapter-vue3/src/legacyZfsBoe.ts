@@ -8,6 +8,7 @@ import {
 import { attachBillTemplateInspector, attachTravelInspector, installBoeInspector } from './index';
 import { SharedRegistrationPool } from './sharedRegistration';
 import { findTravelOwner } from './travelOwner';
+import { isSupportedBoeVersion } from './boeVersion';
 
 declare const process: { env?: { NODE_ENV?: string } } | undefined;
 declare const require: ((specifier: string) => unknown) | undefined;
@@ -18,6 +19,18 @@ interface LegacyDesign {
 }
 
 let cachedLegacyDesign: LegacyDesign | undefined;
+
+function isSupportedHost(): boolean {
+  let version: unknown;
+  try {
+    if (typeof require === 'function') {
+      version = (require('@zfs/boe/package.json') as { version?: unknown } | undefined)?.version;
+    }
+  } catch {
+    // 无法识别宿主版本时跳过采集，不向业务生命周期抛出异常。
+  }
+  return isSupportedBoeVersion(version);
+}
 
 function resolveLegacyDesign(): LegacyDesign {
   if (cachedLegacyDesign) return cachedLegacyDesign;
@@ -65,7 +78,7 @@ function resolveOptions(component: BillTemplateComponentLike, options: ZfsBoeIns
   return {
     projectCode: options.projectCode ?? (typeof window === 'undefined' ? 'unknown-project' : window.location.host),
     environment,
-    adapterVersion: options.adapterVersion ?? '0.2.9',
+    adapterVersion: options.adapterVersion ?? '0.2.10',
     ...(options.zfsPackages ? { zfsPackages: options.zfsPackages } : {}),
     ...(resolvedVueVersion ? { vueVersion: resolvedVueVersion } : {}),
     compatibility: {
@@ -112,7 +125,7 @@ function acquireTravel(component: TravelComponentLike, resolved: AdapterOptions,
 }
 
 function registerBill(component: BillTemplateComponentLike, options: ZfsBoeInspectorOptions): void {
-  if (registrations.has(component)) return;
+  if (!isSupportedHost() || registrations.has(component)) return;
   const resolved = resolveOptions(component, options);
   installBoeInspector(resolved);
   const dispose = attachBillTemplateInspector(component, {
@@ -147,7 +160,7 @@ export function createBillTemplateInspectorMixin(options: ZfsBoeInspectorOptions
 
 export function createTravelInspectorMixin(options: ZfsBoeInspectorOptions = {}) {
   const register = (component: TravelComponentLike) => {
-    if (directTravelReleases.has(component) || !hasTravelData(component)) return;
+    if (!isSupportedHost() || directTravelReleases.has(component) || !hasTravelData(component)) return;
     const resolved = resolveOptions(component, options);
     installBoeInspector(resolved);
     directTravelReleases.set(component, acquireTravel(component, resolved));

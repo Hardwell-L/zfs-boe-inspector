@@ -8,6 +8,8 @@ ZFS BOE Runtime Adapter，用于从真实 BOE 页面采集最终模板、字段�
 npm install @zfs-boe-inspector/adapter-vue3
 ```
 
+BOE 宿主版本范围为 `3.x`、`4.x`，包括 `4.2.0-4`、`4.1.2-100`、`3.3.0-beta.1` 等项目后缀版本。宿主项目需自行安装 `@zfs/boe`；Adapter 不声明该包的 npm peer 约束，以避免预发布后缀导致安装冲突。`/zfs-boe` 入口在注册采集前校验宿主主版本，其他版本或无法识别的版本会提示并跳过采集；具体采集能力仍取决于宿主结构和所选入口。
+
 ## Options API / Mixin
 
 ```js
