@@ -306,8 +306,9 @@ export function createRedactor() {
       .replace(/\bsk-[\w-]+/g, '[凭据已移除]')
       .replace(/((?:password|passwd|secret|api[_-]?key|authorization|cookie|access[_-]?token|refresh[_-]?token)\s*["']?\s*[:=]\s*)[^\n,;}]+/gi, '$1[凭据已移除]');
     if (original) return stripped;
-    return stripped.replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, alias)
-      .replace(/\b(?:\d{15,19}[\dXx]?|1[3-9]\d{9})\b/g, alias);
+    // 限定邮箱起点，避免大段字母或残缺邮箱从每个字符重新尝试匹配。
+    const emails = stripped.includes('@') ? stripped.replace(/(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, alias) : stripped;
+    return emails.replace(/\b(?:\d{15,19}[\dXx]?|1[3-9]\d{9})\b/g, alias);
   };
   const visit = (value: unknown, original = false, key = '', configuration = false, mapping = false): unknown => {
     if (SECRET.test(key)) return '[凭据已移除]';

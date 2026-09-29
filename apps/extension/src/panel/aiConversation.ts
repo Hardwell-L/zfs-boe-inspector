@@ -27,3 +27,19 @@ export function sentEvidence(items: AiEvidence[], redact: (value: unknown, origi
     return { id: item.id, title: String(redact(item.title, item.original)), path: item.path, value };
   });
 }
+
+// 网络增量先合并，避免每个 token 都触发 Markdown 全文解析与滚动布局。
+export function createTextBatch(append: (text: string) => void) {
+  let pending = '';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    const text = pending; pending = '';
+    if (text) append(text);
+  };
+  return {
+    push(text: string) { pending += text; if (timer === undefined) timer = setTimeout(flush, 50); },
+    flush,
+  };
+}

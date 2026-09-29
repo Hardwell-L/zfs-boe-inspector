@@ -7,6 +7,7 @@ import { scopeIssues } from './aiScopes';
 import { formatLocalDateTime } from './time';
 import type { AiAnswer, AiWorkspace } from './useAiWorkspace';
 import AiMarkdown from './AiMarkdown';
+import AiModelSettings from './AiModelSettings.vue';
 import AiScopeSelector from './AiScopeSelector.vue';
 import AiEvidenceView from './AiEvidenceView.vue';
 import DismissibleNotice from './DismissibleNotice.vue';
@@ -23,8 +24,9 @@ const snapshot = computed(() => session.value?.source.snapshot);
 const locked = computed(() => workspace.busy || props.refreshing || props.pickerActive || !session.value || !workspace.available(session.value));
 const ownRequest = computed(() => state.request?.sessionId === session.value?.id ? state.request : undefined);
 const draftLocked = computed(() => Boolean(ownRequest.value) || props.pickerActive || !session.value || !workspace.available(session.value));
-const preview = computed(() => session.value ? workspace.requestView(session.value) : undefined);
-const byteCount = computed(() => preview.value ? bytes(preview.value.body) : 0);
+const preview = computed(() => props.active && session.value && (state.tab === 'evidence' || (drawerOpen.value && !viewedAnswer.value))
+  ? workspace.requestView(session.value) : undefined);
+const byteCount = computed(() => preview.value?.bytes ?? 0);
 const invalidScopes = computed(() => session.value ? scopeIssues(session.value.source.snapshot, session.value.scopes) : []);
 const selectedScopes = computed(() => {
   const owner = session.value;
@@ -76,10 +78,6 @@ function renameKeydown(event: InstanceType<typeof window.KeyboardEvent>) {
   if (event.key === 'Enter') { event.preventDefault(); finishRename(); }
   if (event.key === 'Escape') { event.preventDefault(); renamingId.value = 0; }
 }
-const modelPreset = computed({
-  get: () => ['deepseek-v4-flash', 'deepseek-v4-pro'].includes(state.settings.model) ? state.settings.model : 'custom',
-  set: (value: string) => { if (value !== 'custom') state.settings.model = value; else state.settings.model = ''; },
-});
 const requestLimitKb = computed({
   get: () => Math.round(state.settings.maxRequestBytes / 1000),
   set: (value: number) => { state.settings.maxRequestBytes = Math.round(value * 1000); },
@@ -328,7 +326,7 @@ function statusText(answer: AiAnswer) {
           </button>
         </div>
         <div class="ai-composer-footer">
-          <button :disabled="!preview" @click="openPreview()">
+          <button :disabled="!session" @click="openPreview()">
             查看发送内容
           </button>
           <small class="muted">{{ workspace.historyDisabled(session) ? '此会话历史已删除，后续不再保存' : state.historySaving ? '正在保存问答…' : workspace.historyUnsaved ? '问答尚未保存，可在历史页重试' : '问答自动保存到本机' }}</small>
@@ -434,44 +432,7 @@ function statusText(answer: AiAnswer) {
       <AiKnowledgeView v-if="state.tab === 'knowledge'" :library="workspace.knowledge" :locked="Boolean(state.request) || pickerActive" />
       <AiHistoryView v-if="state.tab === 'history'" :entries="state.history" :loading="!state.historyReady" :saving="Boolean(state.historySaving)" :unsaved="workspace.historyUnsaved" :deleting="state.historyDeleting" @delete="workspace.deleteHistory($event)" @refresh="workspace.reloadHistory()" @retry="workspace.retryHistory()" />
       <div v-show="state.tab === 'settings'" class="ai-tab-page">
-        <h3>模型设置</h3><p class="muted">
-          兼容 OpenAI Chat Completions 接口。测试仅发送简短问题。
-        </p>
-        <section class="ai-card ai-model-card">
-          <div class="ai-settings">
-            <label>Base URL<input v-model="state.settings.baseUrl" :disabled="workspace.busy" placeholder="https://api.deepseek.com"></label>
-            <label>模型选择<select v-model="modelPreset" :disabled="workspace.busy"><option value="deepseek-v4-flash">DeepSeek V4 Flash · deepseek-v4-flash</option><option value="deepseek-v4-pro">DeepSeek V4 Pro · deepseek-v4-pro</option><option value="custom">自定义模型</option></select></label>
-            <label v-if="modelPreset === 'custom'">模型标识<input v-model="state.settings.model" :disabled="workspace.busy" placeholder="填写服务支持的 model 标识"></label>
-            <label>API Key<input v-model="state.settings.key" :disabled="workspace.busy" type="password" autocomplete="off"></label>
-            <label><input v-model="state.settings.remember" :disabled="workspace.busy" type="checkbox">记住本机 Key（扩展存储不提供加密保险库）</label>
-            <section class="ai-advanced-settings">
-              <h4>高级设置</h4><label>回答输出上限<input v-model.number="state.settings.maxTokens" :disabled="workspace.busy" type="number" min="128" max="65536" step="128"></label><p class="muted">
-                默认 4096；达到上限后可手动继续生成。实际支持范围取决于模型。
-              </p>
-              <label>请求体上限（KB）<input v-model.number="requestLimitKb" :disabled="workspace.busy" type="number" min="32" max="2000" step="1"></label><p class="muted">
-                默认 150 KB；范围 32–2000 KB，仅限制发送的请求 JSON 大小。
-              </p>
-            </section>
-            <div class="ai-settings-actions">
-              <button :disabled="workspace.busy" @click="workspace.save()">
-                保存设置
-              </button><div class="ai-test-action">
-                <button :disabled="workspace.busy" @click="workspace.test()">
-                  {{ state.test.status === 'testing' ? '测试中…' : '测试模型' }}
-                </button><DismissibleNotice v-if="state.test.status !== 'idle'" :auto-close-ms="state.test.status === 'success' ? 3000 : 0" :active="active && state.tab === 'settings'" :notice-key="`${state.test.status}:${state.test.message}`" class="ai-test-status" :class="`is-${state.test.status}`">
-                  {{ state.test.message }}
-                </DismissibleNotice>
-              </div><button :disabled="workspace.busy" @click="workspace.save(true)">
-                清除 Key
-              </button>
-            </div>
-            <DismissibleNotice v-if="state.settingsNote" :auto-close-ms="3000" :active="active && state.tab === 'settings'" :notice-key="state.settingsNote" class="muted" @close="state.settingsNote = ''">
-              {{ state.settingsNote }}
-            </DismissibleNotice><DismissibleNotice v-if="state.settingsError" :notice-key="state.settingsError" class="error-banner" role="alert" @close="state.settingsError = ''">
-              {{ state.settingsError }}
-            </DismissibleNotice>
-          </div>
-        </section>
+        <AiModelSettings :workspace="workspace" :active="active && state.tab === 'settings'" />
       </div>
     </div>
 

@@ -13,6 +13,9 @@ function record(value: unknown): Record<string, unknown> { return value && typeo
 const runtimeFlags = [['visible', '显示'], ['editable', '可编辑'], ['required', '必填']] as const;
 function runtime(item: FrozenEvidence, key: string) { return record(record(item.value).runtimeState)[key]; }
 const copyStatus = ref('');
+const technicalOpen = ref(false);
+const technicalJson = computed(() => technicalOpen.value ? JSON.stringify(props.requests, null, 2) : '');
+function toggleTechnical(event: InstanceType<typeof window.Event>) { technicalOpen.value = (event.target as InstanceType<typeof window.HTMLDetailsElement>).open; }
 async function copyTechnical() {
   copyStatus.value = '';
   try { await window.navigator.clipboard.writeText(JSON.stringify(props.requests, null, 2) ?? ''); copyStatus.value = '已复制原始数据'; }
@@ -44,13 +47,13 @@ async function copyTechnical() {
       <AiEvidenceValue v-else :expanded="true" :value="item.value" :trace="item.group === 'trace'" />
     </article>
   </section>
-  <details class="ai-technical-details">
+  <details class="ai-technical-details" @toggle="toggleTechnical">
     <summary>技术详情 · 原始数据（保留时间精度）</summary>
     <button @click="copyTechnical">
       复制原始数据
     </button><DismissibleNotice v-if="copyStatus" :auto-close-ms="copyStatus === '已复制原始数据' ? 3000 : 0" :notice-key="copyStatus" @close="copyStatus = ''">
       {{ copyStatus }}
     </DismissibleNotice>
-    <pre>{{ JSON.stringify(requests, null, 2) }}</pre>
+    <pre v-if="technicalOpen">{{ technicalJson }}</pre>
   </details>
 </template>

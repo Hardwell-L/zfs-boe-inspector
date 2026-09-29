@@ -1,8 +1,8 @@
 import { computed, markRaw, onBeforeUnmount, reactive, watch } from 'vue';
 import type { BoeInspectionSnapshot, InspectionSelection, RuleEvaluation, TraceSession } from '@zfs-boe-inspector/shared-types';
 import { AI_SYSTEM_PROMPT, buildAiEvidence, createRedactor, scopeIdentity, scopeLabel, type AiEvidence } from './aiContext';
-import { aiRequestBody, defaultAiSettings, loadAiSettings, saveAiSettings, streamAnswer, testAiConnection, validateRequestLimit, type AiSettings, type ChatMessage, type StreamResult } from './aiClient';
-import { bytes, recentHistory, sentEvidence } from './aiConversation';
+import { prepareAiRequest, defaultAiSettings, loadAiSettings, saveAiSettings, streamAnswer, testAiConnection, validateRequestLimit, type AiRequestBody, type PreparedAiRequest, type AiSettings, type ChatMessage, type StreamResult } from './aiClient';
+import { bytes, createTextBatch, recentHistory, sentEvidence } from './aiConversation';
 import { scopeIssues } from './aiScopes';
 import { deleteAiHistory, historyFromSession, loadAiHistory, saveAiHistory, type AiHistory } from './aiHistory';
 import { KNOWLEDGE_LIMITS, knowledgeQuery, type KnowledgeHit } from './knowledge';
@@ -14,8 +14,8 @@ export type FrozenEvidence = ReturnType<typeof sentEvidence>[number] & Pick<AiEv
 export interface AiAnswer {
   id: number; context: number; sentAt: string; capturedAt: string; question: string; answer: string;
   status: StreamResult['status'] | 'streaming'; error: string; evidence: FrozenEvidence[];
-  scopes: string[]; service: { model: string; baseUrl: string; maxTokens: number };
-  baseMessages: ChatMessage[]; requests: ReturnType<typeof aiRequestBody>[]; omitted: number;
+  scopes: string[]; service: Pick<AiSettings, 'model' | 'baseUrl' | 'maxTokens' | 'protocol' | 'addressMode' | 'reasoningEffort' | 'chatTokenMode'>;
+  baseMessages: ChatMessage[]; requests: AiRequestBody[]; omitted: number;
 }
 export interface AiSession {
   id: number; title: string; customTitle: boolean; historyId: string; createdAt: string; binding: string; source: AiSource; draft: string;
@@ -25,7 +25,7 @@ export interface AiSession {
   collapsed: boolean; staleDraft: boolean;
   knowledgeEnabled: boolean; knowledgeHits: KnowledgeHit[]; knowledgeQuery: string; knowledgeKey: string; knowledgeNote: string;
 }
-interface ActiveRequest { id: number; sessionId: number; phase: 'preparing' | 'generating'; controller: AbortController }
+interface ActiveRequest { id: number; sessionId: number; phase: 'preparing' | 'generating'; controller: AbortController; flush?: () => void }
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 export const sourceIdentity = (source: AiSource) => JSON.stringify([source.pageId, source.snapshot.meta.projectCode, source.snapshot.meta.environment, source.snapshot.instanceId,
   // 无业务 ID 时，数据变化也无法排除切换了草稿；保守要求新会话。
@@ -63,22 +63,30 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
   const available = (session: AiSession) => Boolean(state.source && sourceIdentity(state.source) === session.binding && !session.staleDraft);
   const mutable = (session: AiSession) => !busy.value && available(session) && !state.pickerSessionId;
 
+  const pendingHistory = new Map<string, AiHistory>();
   function writeHistory(entry: AiHistory) {
+    pendingHistory.set(entry.id, entry);
+    if (historyWrites.has(entry.id)) return;
     state.historySaving += 1;
-    const previous = historyWrites.get(entry.id) ?? Promise.resolve();
-    const pending = previous.then(() => saveAiHistory(entry)).then((saved) => {
-      if (!saved) forgetHistory(entry.id);
-      failedHistory.delete(entry.id);
-      if (!failedHistory.size) state.historyError = '';
-    }).catch(() => {
-      failedHistory.set(entry.id, entry);
-      state.historyError = '问答历史保存失败（可能空间不足），内容暂留当前面板，请重试保存。';
-    }).finally(() => {
-      state.historySaving -= 1;
-      if (historyWrites.get(entry.id) === pending) historyWrites.delete(entry.id);
-    });
+    // 慢存储只保留一份最新待写快照，避免积压所有中间回答。
+    const pending = Promise.resolve().then(async () => {
+      while (pendingHistory.has(entry.id) && !deletedHistory.has(entry.id)) {
+        const latest = pendingHistory.get(entry.id)!;
+        pendingHistory.delete(entry.id);
+        try {
+          const saved = await saveAiHistory(latest);
+          if (!saved) forgetHistory(entry.id);
+          failedHistory.delete(entry.id);
+          if (!failedHistory.size) state.historyError = '';
+        } catch {
+          failedHistory.set(entry.id, latest);
+          state.historyError = '问答历史保存失败（可能空间不足），内容暂留当前面板，请重试保存。';
+        }
+      }
+    }).finally(() => { state.historySaving -= 1; historyWrites.delete(entry.id); });
     historyWrites.set(entry.id, pending);
   }
+
   function persist(session: AiSession) {
     window.clearTimeout(historyTimers.get(session.historyId)); historyTimers.delete(session.historyId);
     if (!session.answers.length || deletedHistory.has(session.historyId) || state.historyDeleting === session.historyId) return;
@@ -96,7 +104,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     for (const entry of failedHistory.values()) writeHistory(entry);
   }
   function forgetHistory(id: string) {
-    deletedHistory.add(id);
+    deletedHistory.add(id); pendingHistory.delete(id);
     window.clearTimeout(historyTimers.get(id)); historyTimers.delete(id);
     failedHistory.delete(id);
     state.history = state.history.filter((entry) => entry.id !== id);
@@ -196,6 +204,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
   function stop() {
     const request = state.request;
     if (!request) return;
+    request.flush?.();
     request.controller.abort();
     const session = state.sessions.find((item) => item.id === request.sessionId);
     const answer = session?.answers.find((item) => item.status === 'streaming');
@@ -319,25 +328,33 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     if (!mutable(session)) return;
     session.trace = undefined; session.eventId = ''; session.conditionsChanged = true; rebuild(session);
   }
-  function requestView(session: AiSession, settings: AiSettings = state.settings) {
-    const selected = [...session.evidence.filter((item) => item.included), ...knowledgeEvidence(session)];
-    const evidence: FrozenEvidence[] = sentEvidence(selected, session.redact).map((item, index) => {
-      const original = selected[index]!;
-      return { ...item, kind: original.kind, group: original.group, ...(original.selection ? { selection: clone(original.selection) } : {}) };
+  const evidenceViews = new WeakMap<AiSession, ReturnType<typeof createEvidenceView>>();
+  function createEvidenceView(session: AiSession) {
+    return computed(() => {
+      const selected = [...session.evidence.filter((item) => item.included), ...knowledgeEvidence(session)];
+      const evidence: FrozenEvidence[] = sentEvidence(selected, session.redact).map((item, index) => {
+        const original = selected[index]!;
+        return { ...item, kind: original.kind, group: original.group, ...(original.selection ? { selection: clone(original.selection) } : {}) };
+      });
+      return { evidence, serialized: JSON.stringify(evidence.map(({ id, title, path, value }) => ({ id, title, path, value }))) };
     });
+  }
+  function requestView(session: AiSession, settings: AiSettings = state.settings) {
+    let view = evidenceViews.get(session);
+    if (!view) { view = createEvidenceView(session); evidenceViews.set(session, view); }
+    const { evidence, serialized } = view.value;
     const scopes = session.scopes.map((scope) => String(session.redact(scopeLabel(session.source.snapshot, scope))));
     const question = String(session.redact(session.draft));
     const history = recentHistory(session.conditionsChanged ? [] : session.answers.filter((answer) => answer.context === session.context && answer.status === 'complete')
       .map((answer) => ({ question: String(session.redact(answer.question)), answer: String(session.redact(answer.answer)) })));
     const messages: ChatMessage[] = [{ role: 'system', content: AI_SYSTEM_PROMPT }, ...history.messages,
-      { role: 'user', content: JSON.stringify({ capturedAt: session.source.snapshot.capturedAt, scopes, question,
-        evidence: evidence.map(({ id, title, path, value }) => ({ id, title, path, value })) }) }];
-    return { evidence, scopes, question, body: aiRequestBody(settings, messages), omitted: history.omitted };
+      { role: 'user', content: `${JSON.stringify({ capturedAt: session.source.snapshot.capturedAt, scopes, question }).slice(0, -1)},"evidence":${serialized}}` }];
+    return { evidence, scopes, question, messages, ...prepareAiRequest(settings, messages), omitted: history.omitted };
   }
   function reconcile(session: AiSession, settings: AiSettings) {
     const basis = JSON.stringify([{ ...session.source.snapshot, capturedAt: undefined }, session.scopes, session.trace, session.eventId,
       session.includeFormattedDto, session.evidence.map((item) => [evidenceIdentity(item), item.included, item.original]),
-      knowledgeEvidence(session), settings.baseUrl, settings.model]);
+      knowledgeEvidence(session), serviceSettings(settings)]);
     if (session.basis && (session.conditionsChanged || session.basis !== basis)) session.context += 1;
     session.basis = basis; session.conditionsChanged = false;
   }
@@ -361,27 +378,35 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     catch (reason) { if (live(request)) session.error = message(reason); }
     finally { release(request); }
   }
-  async function generate(answer: AiAnswer, settings: AiSettings, messages: ChatMessage[], request: ActiveRequest) {
-    const body = aiRequestBody(settings, messages);
+  function serviceSettings(settings: AiSettings): AiAnswer['service'] {
+    const { model, baseUrl, maxTokens, protocol, addressMode, reasoningEffort, chatTokenMode } = settings;
+    return { model, baseUrl, maxTokens, protocol, addressMode, reasoningEffort, chatTokenMode };
+  }
+  async function generate(answer: AiAnswer, settings: AiSettings, prepared: PreparedAiRequest, request: ActiveRequest) {
     validateRequestLimit(settings.maxRequestBytes);
-    if (bytes(body) > settings.maxRequestBytes) throw new Error(`请求超过 ${requestLimitLabel(settings.maxRequestBytes)}，请缩小范围`);
+    if (prepared.bytes > settings.maxRequestBytes) throw new Error(`请求超过 ${requestLimitLabel(settings.maxRequestBytes)}，请缩小范围`);
     if (!live(request)) return;
-    state.request!.phase = 'generating'; answer.status = 'streaming'; answer.error = ''; answer.requests.push(clone(body));
+    state.request!.phase = 'generating'; answer.status = 'streaming'; answer.error = ''; answer.requests.push(markRaw(prepared.body));
     if (settings.key.trim()) historySecrets.add(settings.key.trim());
     const owner = state.sessions.find((session) => session.id === request.sessionId)!;
     persist(owner);
-    const result = await streamAnswer(settings, messages, request.controller.signal, (text) => {
+    const batch = createTextBatch((text) => {
       if (live(request)) { answer.answer += text; scheduleHistory(owner); }
     });
-    if (live(request)) { answer.status = result.status; answer.error = result.error ?? ''; persist(owner); }
+    request.flush = batch.flush;
+    try {
+      const result = await streamAnswer(settings, prepared, request.controller.signal, (text) => { if (live(request)) batch.push(text); });
+      batch.flush();
+      if (live(request)) { answer.status = result.status; answer.error = result.error ?? ''; persist(owner); }
+    } finally { batch.flush(); delete request.flush; }
   }
   async function deliver(session: AiSession, prepared: ReturnType<typeof requestView>, settings: AiSettings, request: ActiveRequest, capturedAt: string) {
     session.answers.push({ id: ++answerSequence, context: session.context, sentAt: new Date().toISOString(), capturedAt,
       question: prepared.question, answer: '', status: 'streaming', error: '', evidence: clone(prepared.evidence), scopes: prepared.scopes,
-      service: { model: settings.model, baseUrl: settings.baseUrl, maxTokens: settings.maxTokens }, baseMessages: clone(prepared.body.messages), requests: [], omitted: prepared.omitted });
+      service: serviceSettings(settings), baseMessages: clone(prepared.messages), requests: [], omitted: prepared.omitted });
     if (session.answers.length === 1 && !session.customTitle) session.title = prepared.question.slice(0, 16) || `会话 ${session.id}`;
     session.draft = ''; session.followLatest = true;
-    await generate(session.answers[session.answers.length - 1]!, settings, prepared.body.messages, request);
+    await generate(session.answers[session.answers.length - 1]!, settings, prepared, request);
   }
   async function send(session: AiSession) {
     if (!configured.value || !session.draft.trim() || (!session.scopes.length && !session.eventId)) return;
@@ -403,7 +428,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
       reconcile(session, settings);
       const prepared = requestView(session, settings);
       if (!prepared.evidence.some((item) => item.kind !== 'knowledge')) throw new Error('请选择至少一项单据证据');
-      if (bytes(prepared.body) > settings.maxRequestBytes) throw new Error(`请求超过 ${requestLimitLabel(settings.maxRequestBytes)}，请调整范围后重新发送`);
+      if (prepared.bytes > settings.maxRequestBytes) throw new Error(`请求超过 ${requestLimitLabel(settings.maxRequestBytes)}，请调整范围后重新发送`);
       await deliver(session, prepared, settings, request, session.source.snapshot.capturedAt);
     } catch (reason) {
       if (live(request)) { session.error = message(reason); session.draft = draft; }
@@ -411,7 +436,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
   }
   async function continueAnswer(session: AiSession, answer: AiAnswer) {
     if (answer.status !== 'length' || answer.context !== session.context || session.conditionsChanged
-      || answer.service.baseUrl !== state.settings.baseUrl || answer.service.model !== state.settings.model) {
+      || JSON.stringify(answer.service) !== JSON.stringify(serviceSettings(state.settings))) {
       session.error = '分析条件已变化，请重新提问'; return;
     }
     const request = acquire(session);
@@ -422,16 +447,16 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
       const source = await readSource(session);
       if (!live(request)) return;
       if (sourceIdentity(source) !== session.binding) throw new Error('页面或单据已变化，请重新提问');
-      await generate(answer, settings, [...clone(answer.baseMessages), { role: 'assistant', content: answer.answer },
-        { role: 'user', content: '请从断点继续，不重复已有内容，继续使用原证据编号，完成结论和建议。' }], request);
+      await generate(answer, settings, prepareAiRequest(settings, [...clone(answer.baseMessages), { role: 'assistant', content: answer.answer },
+        { role: 'user', content: '请从断点继续，不重复已有内容，继续使用原证据编号，完成结论和建议。' }]), request);
     } catch (reason) { if (live(request)) session.error = message(reason); }
     finally { release(request); }
   }
-  watch(() => [state.settings.baseUrl, state.settings.model], () => {
+  watch(() => JSON.stringify(serviceSettings(state.settings)), () => {
     for (const session of state.sessions) session.conditionsChanged = true;
     if (state.closed) state.closed.session.conditionsChanged = true;
   }, { flush: 'sync' });
-  watch(() => [state.settings.baseUrl, state.settings.model, state.settings.key, state.settings.maxTokens, state.settings.maxRequestBytes], () => {
+  watch(() => [state.settings.baseUrl, state.settings.model, state.settings.key, state.settings.maxTokens, state.settings.maxRequestBytes, state.settings.protocol, state.settings.addressMode, state.settings.reasoningEffort, state.settings.chatTokenMode], () => {
     testSequence += 1; state.test = { status: 'idle', message: '' };
   }, { flush: 'sync' });
   watch(() => knowledge.state.revision, () => {
@@ -469,7 +494,8 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     } catch (reason) { if (!disposed && id === testSequence) state.test = { status: 'error', message: `✕ ${message(reason)}` }; }
   }
   onBeforeUnmount(() => {
-    disposed = true; stop(); testSequence += 1;
+    // 先提交尚未刷新的文本，再让请求失效。
+    stop(); disposed = true; testSequence += 1;
     for (const session of state.sessions) if (historyTimers.has(session.historyId)) persist(session);
   });
   const workspace = { state, current, busy, configured, available, mutable, setSource, create, select, rename, close, undoClose, stop,
