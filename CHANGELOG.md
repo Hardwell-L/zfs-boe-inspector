@@ -1,5 +1,9 @@
 # Changelog
 
+## npm 0.2.12 - 2026-09-29
+
+- 修复 `select` 控件使用 `options`、`ajax` 或 `fastCode` 加载选项时误报数据源配置缺失。
+
 ## Extension 0.2.11 - 2026-09-29
 
 - 新增模型服务设置页，支持 OpenAI 兼容接口与 Responses API，并优化流式问答体验。
