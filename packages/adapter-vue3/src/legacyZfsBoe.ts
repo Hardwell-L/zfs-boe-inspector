@@ -102,8 +102,21 @@ function resolveOptions(component: BillTemplateComponentLike, options: ZfsBoeIns
 
 function collectorOptions(options: AdapterOptions) {
   const design = resolveLegacyDesign();
+  let warningRules: Record<string, unknown> | undefined;
+  try {
+    if (typeof require === 'function') {
+      const loaded = require('@zfs/boe-core/src/config/warning') as Record<string, unknown> | undefined;
+      const registry = loaded?.default ?? loaded;
+      if (registry && typeof registry === 'object' && !Array.isArray(registry)) {
+        warningRules = registry as Record<string, unknown>;
+      }
+    }
+  } catch {
+    // 旧项目无法读取规则表时保留未验证状态，不影响已有采集。
+  }
   return {
     legacyMode: true,
+    ...(warningRules ? { warningRules } : {}),
     ...(design.areaConfig ? { areaConfig: design.areaConfig } : {}),
     ...(design.fieldConfig ? { fieldConfig: design.fieldConfig } : {}),
     ...(options.compatibility ? { compatibility: options.compatibility } : {}),

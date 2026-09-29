@@ -17,6 +17,7 @@ const FIELD_RULE_IDS = [
   'FIELD_DUPLICATE_IN_AREA',
   'FIELD_RUNTIME_PATH_MISSING',
   'FIELD_CONFIG_PARSE_ERROR',
+  'FIELD_WARNING_RULE_MISSING',
   'FIELD_REQUIRED_HIDDEN',
   'FIELD_REQUIRED_READONLY_EMPTY',
   'FIELD_DYNAMIC_CONFIG_INVALID',
@@ -89,12 +90,15 @@ function transEntries(value: unknown): Array<{ from?: string; to?: string }> | u
   }));
 }
 
-function hasFunctionMetadata(value: unknown, seen = new Set<unknown>()): boolean {
-  if (!value || typeof value !== 'object') return false;
-  if (seen.has(value)) return false;
+function functionMetadataPaths(value: unknown, path = '', seen = new Set<unknown>()): string[] {
+  if (!value || typeof value !== 'object' || seen.has(value)) return [];
+  if (asRecord(value)?.__kind === 'function') return [path];
   seen.add(value);
-  if (asRecord(value)?.__kind === 'function') return true;
-  return Object.values(value).some((child) => hasFunctionMetadata(child, seen));
+  const paths = Object.entries(value).flatMap(([key, child]) => (
+    functionMetadataPaths(child, path ? `${path}.${key}` : key, seen)
+  ));
+  seen.delete(value);
+  return paths;
 }
 
 function addPassedResults(results: RuleEvaluation[]): RuleEvaluation[] {
@@ -132,6 +136,8 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
   }
   const results: RuleEvaluation[] = [];
   const fields = collectFields(snapshot);
+  const warningRuleNames = snapshot.config.warningRuleNames;
+  const warningRules = warningRuleNames === undefined ? undefined : new Set(warningRuleNames);
   const knownFields = new Set(fields.filter(({ areaCode, fieldCode }) => areaCode && fieldCode)
     .map(({ areaCode, fieldCode }) => `${areaCode}.${fieldCode}`));
   const computeGraph = new Map<string, Set<string>>();
@@ -190,6 +196,32 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
           `字段 ${identity} 的 ${key} 配置不是有效 JSON`,
           [`${path}.${key}`],
           { actual: jsonValue(field[key]), reason: parsed.error },
+        ));
+      }
+    }
+
+    if (typeof field.warning === 'string' && field.warning !== '') {
+      const warningPath = `${path}.warning`;
+      if (!warningRules) {
+        results.push(skipped(
+          'FIELD_WARNING_RULE_MISSING',
+          'field-config',
+          `字段 ${identity} 的警告规则 ${field.warning} 未验证：未采集宿主 warning 规则表`,
+          [warningPath],
+        ));
+      } else if (!warningRules.has(field.warning)) {
+        results.push(issue(
+          'FIELD_WARNING_RULE_MISSING',
+          'field-config',
+          'error',
+          `字段 ${identity}（${String(field.fieldName ?? field.label ?? fieldCode)}）引用了不存在的警告规则 ${field.warning}`,
+          [warningPath, 'config.warningRuleNames'],
+          {
+            actual: field.warning,
+            expected: [...warningRules],
+            reason: '字段 warning 必须引用宿主项目已注册的警告规则；字段编码本身不代表规则已注册。',
+            suggestion: `检查 ${identity} 的 warning 配置，改为项目已注册的规则名；不需要警告时清空该配置。`,
+          },
         ));
       }
     }
@@ -293,22 +325,26 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
 
     const dataSourceType = field.dataSourceType;
     const hasDataSource = !isEmpty(dataSourceType) || !isEmpty(field.service) || !isEmpty(field.requestUrl);
-    if (hasDataSource && isEmpty(field.config) && isEmpty(field.staticConfig) && isEmpty(field.requestUrl) && isEmpty(field.service)) {
+    const hasLovKey = typeof field.lovKey === 'string' && field.lovKey.trim() !== '';
+    if (hasDataSource && !hasLovKey && isEmpty(field.config) && isEmpty(field.staticConfig) && isEmpty(field.requestUrl) && isEmpty(field.service)) {
       results.push(issue(
         'FIELD_DATASOURCE_INCOMPLETE',
         'field-config',
         'warning',
-        `字段 ${identity} 声明了数据源类型但缺少可用配置`,
-        [`${path}.dataSourceType`],
+        `字段 ${identity} 配置了数据源类型 ${String(dataSourceType)}，但快照中未发现数据源配置`,
+        ['dataSourceType', 'lovKey', 'config', 'staticConfig', 'requestUrl', 'service'].map((key) => `${path}.${key}`),
+        {
+          reason: '当前字段未配置非空 lovKey，且 config、staticConfig、requestUrl、service 均为空。请检查该字段的数据源设置；若选项由组件默认值或运行时逻辑提供，需结合实际选项加载情况确认，不能仅据此认定数据源失效。',
+          actual: jsonValue(dataSourceType),
+        },
       ));
     }
-    if (hasDataSource && ['multi-table', 'table', 'tree'].some((name) => String(field.fieldType).includes(name)) && isEmpty(field.rowKey)) {
-      results.push(issue(
+    if (['multi-table', 'table'].includes(String(field.fieldType)) && !field.rowKey) {
+      results.push(skipped(
         'FIELD_ROW_KEY_MISSING',
         'field-config',
-        'warning',
-        `数据源字段 ${identity} 缺少 rowKey`,
-        [`${path}.rowKey`],
+        `字段 ${identity} 未显式配置 rowKey，BOE 默认使用 fieldCode（${fieldCode}）；快照不含数据源原始响应，无法确认返回行是否包含该键`,
+        [`${path}.rowKey`, `${path}.fieldCode`, `${path}.fieldType`],
       ));
     }
     for (const key of ['config', 'staticConfig']) {
@@ -386,14 +422,18 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
     if (booleanValue(field.import) === true && (visible === false || editable === false)) {
       results.push(issue('FIELD_IMPORT_CONFIG_CONFLICT', 'field-config', 'warning', `字段 ${identity} 可导入但当前隐藏或不可编辑`, [`${path}.import`]));
     }
-    if (hasFunctionMetadata(field)) {
+    const functionPaths = functionMetadataPaths(field);
+    if (functionPaths.length > 0) {
       results.push(issue(
         'FIELD_FUNCTION_UNINSPECTABLE',
         'field-config',
         'info',
-        `字段 ${identity} 包含函数型配置，首版仅记录元数据`,
-        [path],
-        { suggestion: '在运行时观察函数执行结果，Inspector 不会主动调用该函数。' },
+        `字段 ${identity} 的 ${functionPaths.join('、')} 包含函数，执行结果尚未验证`,
+        functionPaths.map((functionPath) => `${path}.${functionPath}`),
+        {
+          reason: '快照仅保留函数名称和参数个数，不包含函数实现或执行结果。此提示不表示配置有误；请在业务页面触发对应操作，检查实际结果。Inspector 不会主动执行这些函数。',
+          suggestion: '查看证据路径对应的函数配置，并在业务页面验证其实际行为。',
+        },
       ));
     }
   }

@@ -98,6 +98,8 @@ export interface BoeInspectionSnapshot {
     areaDescriptors?: Record<string, FieldPropertyDescriptor[]>;
     fieldDescriptors?: Record<string, FieldPropertyDescriptor[]>;
     fieldRuntimeStates?: FieldRuntimeState[];
+    /** 宿主 warning 注册表的可用规则名；缺省表示未采集，空数组表示已采集但无规则。 */
+    warningRuleNames?: string[];
   };
   travel?: TravelInspectionData;
   applyBoe?: ApplyBoeEvidenceSnapshot;

@@ -69,6 +69,7 @@ export interface BillTemplateCollectorOptions {
   getInstanceId?: () => string;
   areaConfig?: Record<string, unknown[]>;
   fieldConfig?: Record<string, unknown[]>;
+  warningRules?: Record<string, unknown>;
   getFormattedBoeDto?: () => unknown;
   getDynamicConfig?: (args: Record<string, unknown>) => boolean | Record<string, unknown> | void;
   getApplySnapshot?: (
@@ -284,6 +285,9 @@ export function createBillTemplateCollector(
       };
       if (areaDescriptors) config.areaDescriptors = areaDescriptors;
       if (fieldDescriptors) config.fieldDescriptors = fieldDescriptors;
+      if (options.warningRules) {
+        config.warningRuleNames = Object.keys(options.warningRules).filter((name) => Boolean(options.warningRules?.[name]));
+      }
       const fieldRuntimeStates = options.legacyMode ? undefined : collectRuntimeStates(component, options.getDynamicConfig);
       if (fieldRuntimeStates) config.fieldRuntimeStates = fieldRuntimeStates;
       let applyBoe: ApplyBoeEvidenceSnapshot | undefined;

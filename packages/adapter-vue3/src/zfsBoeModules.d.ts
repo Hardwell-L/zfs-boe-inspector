@@ -11,6 +11,11 @@ declare module '@zfs/boe/zfs-boe-core/src/config/boeDesign' {
   export const fieldConfig: Record<string, unknown[]>;
 }
 
+declare module '@zfs/boe/zfs-boe-core/src/config/warning' {
+  const warningRules: Record<string, unknown>;
+  export default warningRules;
+}
+
 declare module '@zfs/boe/zfs-boe-core/src/utils/fieldDynamicConfig' {
   const getDynamicConfig: (
     args: Record<string, unknown>,

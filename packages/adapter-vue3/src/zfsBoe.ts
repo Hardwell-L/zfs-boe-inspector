@@ -6,6 +6,7 @@ import {
 import boePackage from '@zfs/boe/package.json';
 import { areaConfig, fieldConfig } from '@zfs/boe/zfs-boe-core/src/config/boeDesign';
 import getDynamicConfig from '@zfs/boe/zfs-boe-core/src/utils/fieldDynamicConfig';
+import warningRules from '@zfs/boe/zfs-boe-core/src/config/warning';
 import {
   deriveInstanceId,
   type AdapterOptions,
@@ -96,6 +97,7 @@ function registerBillTemplate(
     areaConfig,
     fieldConfig,
     getDynamicConfig,
+    warningRules,
     ...(resolved.compatibility ? { compatibility: resolved.compatibility } : {}),
     ...(options.getApplySnapshot ? { getApplySnapshot: options.getApplySnapshot } : {}),
     ...(options.getTraceConditions ? { getTraceConditions: options.getTraceConditions } : {}),

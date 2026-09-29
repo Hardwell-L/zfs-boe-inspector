@@ -15,6 +15,8 @@
 
 ## 规则约束
 
+字段警告规则检查 `FIELD_WARNING_RULE_MISSING` 将非空字符串 `field.warning` 与宿主采集的 `config.warningRuleNames` 精确匹配，未注册时报 `error`，证据指向字段的 `warning` 配置。规则名由适配器读取宿主的 `config/warning`，不硬编码内置规则名单，也不执行 `validateFunc`。已解析的对象规则不参与名称匹配；旧 Snapshot 或无法读取注册表时返回 `skipped`。通用采集器可通过 `warningRules` 传入项目实际使用的注册表。
+
 1. 规则必须是纯函数，不修改 Snapshot。
 2. 证据不足时返回 `skipped`，禁止按经验猜测 `issue`。
 3. 不请求接口，不调用业务 validator，不执行函数型配置。

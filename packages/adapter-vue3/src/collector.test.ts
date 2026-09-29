@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { createBillTemplateCollector, createTravelCollector, mergeContributions } from './collector';
 
 describe('BillTemplate Collector', () => {
+  it('采集宿主警告规则名称，不执行函数，并区分未采集与空注册表', () => {
+    const component = { template: [], data: {} };
+    const registry: Record<string, unknown> = {
+      stayAmount: { validateFunc: () => { throw new Error('不得执行警告规则'); } },
+      disabled: null,
+    };
+    const collector = createBillTemplateCollector(component, { warningRules: registry });
+    expect(collector.collect().config?.warningRuleNames).toEqual(['stayAmount']);
+    registry.spareS42 = { sources: [] };
+    expect(collector.collect().config?.warningRuleNames).toEqual(['stayAmount', 'spareS42']);
+    expect(createBillTemplateCollector(component).collect().config).not.toHaveProperty('warningRuleNames');
+    expect(createBillTemplateCollector(component, { warningRules: {} }).collect().config?.warningRuleNames).toEqual([]);
+  });
+
   it('动态配置评估只修改字段浅拷贝', () => {
     const field = { fieldCode: 'amount', fieldType: 'number' };
     const component = {
