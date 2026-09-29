@@ -4,7 +4,7 @@ import { record, displayValue } from './inspectionView';
 import { comparisonLabels, fieldCaption } from './propertyJsonView';
 import ConfigValueTree from './ConfigValueTree.vue';
 
-const props = withDefaults(defineProps<{ value: unknown; areaCode: string; names: Map<string, string>; inheritedAction?: unknown; depth?: number }>(), { depth: 0, inheritedAction: undefined });
+const props = withDefaults(defineProps<{ value: unknown; areaCode: string; names: Map<string, string>; inheritedAction?: unknown; depth?: number }>(), { depth: 0, inheritedAction: () => '' });
 const rule = computed<Record<string, unknown>>(() => Array.isArray(props.value) ? { method: 'some', action: '=', conditions: props.value } : record(props.value));
 const group = computed(() => Array.isArray(rule.value.conditions) && ['some', 'every'].includes(String(rule.value.method)));
 const action = computed(() => rule.value.action === undefined ? props.inheritedAction : rule.value.action);

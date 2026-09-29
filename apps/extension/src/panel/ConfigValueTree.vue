@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import { displayValue } from './inspectionView';
 
-const props = withDefaults(defineProps<{ value: unknown; labels?: Record<string, string>; depth?: number }>(), { depth: 0, labels: undefined });
+const props = withDefaults(defineProps<{ value: unknown; labels?: Record<string, string> | undefined; depth?: number }>(), { depth: 0, labels: () => ({}) });
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const entries = computed(() => isObject(props.value) ? Object.entries(props.value) : []);
 const rows = computed(() => Array.isArray(props.value) ? props.value.slice(0, 100) : []);
