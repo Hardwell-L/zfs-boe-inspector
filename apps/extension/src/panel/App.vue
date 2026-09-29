@@ -28,6 +28,7 @@ import { useAiWorkspace, sourceIdentity, type AiSession } from './useAiWorkspace
 import AiPanel from './AiPanel.vue';
 import TracePanel from './TracePanel.vue';
 import ValidationRules from './ValidationRules.vue';
+import CalculationRules from './CalculationRules.vue';
 import { fieldAreas, indexedFieldDetail, issueItems } from './inspectionView';
 import { dynamicDisplayModel, hasDisplayText } from './ruleDiagnosticView';
 
@@ -144,6 +145,11 @@ const issueGroups = computed(() => [
 const propertyTabs = computed(() => selectedArea.value ? areaTabs : fieldTabs);
 const activePropertyGroup = computed(() => (selectedArea.value?.groups ?? selectedField.value?.groups)
   ?.find(({ key }) => key === propertyTab.value));
+const readableCalculation = computed(() => {
+  const version = snapshot.value?.meta.zfsPackages?.['@zfs/boe'];
+  const major = typeof version === 'string' ? /^(\d+)\./.exec(version)?.[1] : undefined;
+  return !!selectedField.value && major !== undefined && Number(major) >= 4;
+});
 const travelView = computed(() => buildTravelView(snapshot.value?.travel));
 const legacyPersonRows = computed(() => travelView.value.legacy && travelView.value.person.employeeId
   ? travelView.value.calendar.filter((row) => row.employeeId === travelView.value.person.employeeId)
@@ -684,11 +690,12 @@ onBeforeUnmount(() => {
                 <h3>{{ activePropertyGroup.label }}</h3>
                 <dl>
                   <template v-for="item in activePropertyGroup.items" :key="item.code">
-                    <dt :title="item.tips" :class="{ 'full-property': selectedArea && item.code === 'validateRules' }">
+                    <dt :title="item.tips" :class="{ 'full-property': (selectedArea && item.code === 'validateRules') || (readableCalculation && item.code === 'calculate') }">
                       {{ item.label }}
                     </dt>
-                    <dd :class="{ 'full-property': selectedArea && item.code === 'validateRules' }">
+                    <dd :class="{ 'full-property': (selectedArea && item.code === 'validateRules') || (readableCalculation && item.code === 'calculate') }">
                       <ValidationRules v-if="selectedArea && item.code === 'validateRules'" :key="selectedArea.areaCode" :value="item.value" />
+                      <CalculationRules v-else-if="readableCalculation && item.code === 'calculate'" :value="item.value" />
                       <template v-else>
                         {{ propertyValue(item.value) }}
                       </template>
