@@ -147,6 +147,22 @@ describe('字段规则', () => {
     expect(result?.reason).toContain('不能仅据此认定数据源失效');
   });
 
+  it.each<Record<string, JsonValue>>([
+    { options: [{ label: '是', value: 'Y' }] },
+    { ajax: '/select/options' },
+    { fastCode: 'YES_NO' },
+    { options: [] },
+    {},
+  ])('select 不因缺少 LOV 配置或选项未加载而误报：%j', (config) => {
+    const snapshot = createSnapshot();
+    snapshot.config.template = [{
+      areaCode: 'boeHeader',
+      areaFields: [{ fieldCode: 'paperAccessories', fieldType: 'select', dataSourceType: '002', ...config }],
+    }];
+    const result = evaluateFieldRules(snapshot).find(({ ruleId }) => ruleId === 'FIELD_DATASOURCE_INCOMPLETE');
+    expect(result?.status).toBe('passed');
+  });
+
   it.each([
     ['BOE_LOV', 'passed'],
     ['', 'issue'],

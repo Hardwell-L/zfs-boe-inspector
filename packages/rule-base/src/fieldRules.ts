@@ -326,7 +326,8 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
     const dataSourceType = field.dataSourceType;
     const hasDataSource = !isEmpty(dataSourceType) || !isEmpty(field.service) || !isEmpty(field.requestUrl);
     const hasLovKey = typeof field.lovKey === 'string' && field.lovKey.trim() !== '';
-    if (hasDataSource && !hasLovKey && isEmpty(field.config) && isEmpty(field.staticConfig) && isEmpty(field.requestUrl) && isEmpty(field.service)) {
+    // select 从 options、ajax 或 fastCode 获取选项，不要求提供 LOV 配置。
+    if (field.fieldType !== 'select' && hasDataSource && !hasLovKey && isEmpty(field.config) && isEmpty(field.staticConfig) && isEmpty(field.requestUrl) && isEmpty(field.service)) {
       results.push(issue(
         'FIELD_DATASOURCE_INCOMPLETE',
         'field-config',
