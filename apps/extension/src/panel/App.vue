@@ -29,7 +29,9 @@ import AiPanel from './AiPanel.vue';
 import TracePanel from './TracePanel.vue';
 import ValidationRules from './ValidationRules.vue';
 import CalculationRules from './CalculationRules.vue';
-import { fieldAreas, indexedFieldDetail, issueItems } from './inspectionView';
+import PropertyJsonView from './PropertyJsonView.vue';
+import { hasPropertyJson } from './propertyJsonView';
+import { fieldAreas, indexedFieldDetail, issueItems, structured } from './inspectionView';
 import { dynamicDisplayModel, hasDisplayText } from './ruleDiagnosticView';
 
 type ViewKey = 'overview' | 'fields' | 'rules' | 'issues' | 'travel' | 'runtime' | 'trace' | 'ai';
@@ -145,10 +147,29 @@ const issueGroups = computed(() => [
 const propertyTabs = computed(() => selectedArea.value ? areaTabs : fieldTabs);
 const activePropertyGroup = computed(() => (selectedArea.value?.groups ?? selectedField.value?.groups)
   ?.find(({ key }) => key === propertyTab.value));
-const readableCalculation = computed(() => {
+const modernFieldProperties = computed(() => {
   const version = snapshot.value?.meta.zfsPackages?.['@zfs/boe'];
   const major = typeof version === 'string' ? /^(\d+)\./.exec(version)?.[1] : undefined;
   return !!selectedField.value && major !== undefined && Number(major) >= 4;
+});
+const readableCalculation = computed(() => {
+  if (!modernFieldProperties.value) return false;
+  const { value } = structured(activePropertyGroup.value?.items.find((item) => item.code === 'calculate')?.value);
+  if (value == null || (typeof value === 'string' && !value.trim())) return false;
+  return !Array.isArray(value) || value.length > 0;
+});
+const jsonProperties = computed(() => new Set(modernFieldProperties.value
+  ? activePropertyGroup.value?.items.filter((item) => hasPropertyJson(item.code, item.value)).map((item) => item.code) : []));
+const propertyFieldNames = computed(() => {
+  const names = new Map<string, string>();
+  for (const area of allAreas.value) {
+    for (const field of area.fields) {
+      if (field.fieldCode && field.fieldName && field.duplicateCount === 1) {
+        names.set(`${area.areaCode}.${field.fieldCode}`, `${area.areaName} - ${field.fieldName}`);
+      }
+    }
+  }
+  return names;
 });
 const travelView = computed(() => buildTravelView(snapshot.value?.travel));
 const legacyPersonRows = computed(() => travelView.value.legacy && travelView.value.person.employeeId
@@ -693,9 +714,10 @@ onBeforeUnmount(() => {
                     <dt :title="item.tips" :class="{ 'full-property': (selectedArea && item.code === 'validateRules') || (readableCalculation && item.code === 'calculate') }">
                       {{ item.label }}
                     </dt>
-                    <dd :class="{ 'full-property': (selectedArea && item.code === 'validateRules') || (readableCalculation && item.code === 'calculate') }">
+                    <dd :class="{ 'full-property': (selectedArea && item.code === 'validateRules') || (readableCalculation && item.code === 'calculate'), 'structured-property': jsonProperties.has(item.code) }">
                       <ValidationRules v-if="selectedArea && item.code === 'validateRules'" :key="selectedArea.areaCode" :value="item.value" />
                       <CalculationRules v-else-if="readableCalculation && item.code === 'calculate'" :value="item.value" />
+                      <PropertyJsonView v-else-if="selectedField && jsonProperties.has(item.code)" :code="item.code" :value="item.value" :area-code="selectedField.selection.areaCode" :names="propertyFieldNames" />
                       <template v-else>
                         {{ propertyValue(item.value) }}
                       </template>
