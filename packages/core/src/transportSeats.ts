@@ -31,7 +31,8 @@ function date(value: unknown): string {
 }
 function incomplete(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
-  if (record(value).__kind) return record(value).__kind !== 'undefined';
+  const kind = (value as RecordValue).__kind;
+  if (kind) return kind !== 'undefined';
   return Object.values(value).some(incomplete);
 }
 
@@ -130,7 +131,7 @@ export function buildTransportInvoiceRows(travel?: TravelInspectionData): Transp
           });
         const matched = matches[0];
         row.status = matched ? 'matched' : 'unmatched';
-        row.result = matched ? '已命中规则' : '差旅人员的坐席超标';
+        row.result = matched ? '已命中规则' : '坐席超标';
         row.standardCandidates = sameBusiness.map((standard) => ({
           transportation: text(standard.transportation),
           transportationName: text(standard.transportationName),

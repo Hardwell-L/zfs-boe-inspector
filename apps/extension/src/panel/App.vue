@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import DismissibleNotice from './DismissibleNotice.vue';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import {
   buildRuleDiagnostics,
   buildTravelView,
@@ -28,6 +28,7 @@ import { useAiWorkspace, sourceIdentity, type AiSession } from './useAiWorkspace
 import AiPanel from './AiPanel.vue';
 import TracePanel from './TracePanel.vue';
 import TravelStandards from './TravelStandards.vue';
+import LazyDetails from './LazyDetails.vue';
 import TransportInvoiceTable from './TransportInvoiceTable.vue';
 import ValidationRules from './ValidationRules.vue';
 import CalculationRules from './CalculationRules.vue';
@@ -44,8 +45,9 @@ const view = ref<ViewKey>('overview');
 const loading = ref(false);
 const error = ref('');
 const status = ref<BridgeStatus>();
-const snapshot = ref<BoeInspectionSnapshot>();
-const report = ref<InspectionReport>();
+// 快照和检查结果整份替换，不为只读的大对象创建深层响应式代理。
+const snapshot = shallowRef<BoeInspectionSnapshot>();
+const report = shallowRef<InspectionReport>();
 const selectedArea = ref<AreaDetail>();
 const selectedField = ref<FieldDetail>();
 const propertyTab = ref<PropertyTab>('base');
@@ -994,7 +996,7 @@ onBeforeUnmount(() => {
 
             <h3>交通发票坐席核对</h3>
             <p class="muted">
-              依据已采集数据核对；命中规则不等于符合标准，需结合控制方式（ALLOW：允许 / WARNING：警告 / FORBID：禁止）。
+              依据已采集数据展示本项坐席标准的提交校验：警告需确认，禁止会拦截；允许或未命中规则时不拦截，不代表整张单据可提交。
             </p>
             <p v-if="!travelView.transportInvoicesCollected" class="tab-empty">
               未采集交通发票数据，请更新采集端并重新采集。
@@ -1039,15 +1041,13 @@ onBeforeUnmount(() => {
               {{ travelView.legacy ? '低版本未提供标准请求历史，无法核对请求次数、请求日期和命中情况。' : '尚未采集到标准请求。' }}
             </p>
 
-            <details v-if="travelView.legacy && snapshot.travel.standardDates?.length" class="raw-travel-data">
-              <summary>查看已有逐日标准结果（仅覆盖页面已计算的日期）</summary>
+            <LazyDetails v-if="travelView.legacy && snapshot.travel.standardDates?.length" class="raw-travel-data" summary="查看已有逐日标准结果（仅覆盖页面已计算的日期）">
               <pre>{{ pretty(snapshot.travel.standardDates) }}</pre>
-            </details>
+            </LazyDetails>
 
-            <details class="raw-travel-data">
-              <summary>查看原始差旅数据</summary>
+            <LazyDetails class="raw-travel-data" summary="查看原始差旅数据">
               <pre>{{ pretty(snapshot.travel) }}</pre>
-            </details>
+            </LazyDetails>
           </template>
         </section>
 

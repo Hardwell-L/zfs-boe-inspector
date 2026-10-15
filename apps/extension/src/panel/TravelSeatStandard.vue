@@ -22,10 +22,10 @@ watch(() => [props.transportation, props.transportationName], () => { expanded.v
 </template>
 
 <style scoped>
-.seat-standard { min-width: 180px; max-width: 360px; white-space: normal; }
+.seat-standard { min-width: 0; width: 100%; max-width: 360px; box-sizing: border-box; white-space: normal; }
 .seat-name { margin-bottom: 6px; overflow-wrap: anywhere; }
 .collapsed { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .seat-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
 .seat-tag { border: 1px solid currentColor; border-radius: 4px; padding: 2px 6px; overflow-wrap: anywhere; max-width: 100%; }
-button { margin-top: 6px; }
+button { margin-top: 6px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 </style>

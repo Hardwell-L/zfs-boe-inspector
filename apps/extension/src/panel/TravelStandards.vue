@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import type { TravelStandardRow } from '@zfs-boe-inspector/core';
 import TravelSeatStandard from './TravelSeatStandard.vue';
+import LazyDetails from './LazyDetails.vue';
 import { groupStandards } from './travelStandardGroups';
 
 const props = defineProps<{
@@ -13,8 +14,11 @@ const props = defineProps<{
 const place = ref('');
 const type = ref('');
 const issuesOnly = ref(false);
-const expandedKey = ref('');
-function toggleDetail(key: string) { expandedKey.value = expandedKey.value === key ? '' : key; }
+const expandedKeys = ref(new Set<string>());
+function toggleDetail(key: string) {
+  if (expandedKeys.value.has(key)) expandedKeys.value.delete(key);
+  else expandedKeys.value.add(key);
+}
 const places = computed(() => [...new Set(props.rows.map((row) => row.place))]);
 const types = computed(() => [...new Set(props.rows.map((row) => row.standardName))]);
 const groups = computed(() => groupStandards(props.rows));
@@ -22,7 +26,7 @@ const filtered = computed(() => groups.value.filter(({ row }) => (!place.value |
   && (!type.value || row.standardName === type.value) && (!issuesOnly.value || row.dataIssue)));
 const visibleCount = computed(() => filtered.value.reduce((total, group) => total + group.rows.length, 0));
 const issueCount = computed(() => props.rows.filter((row) => row.dataIssue).length);
-function reset() { place.value = ''; type.value = ''; issuesOnly.value = false; expandedKey.value = ''; }
+function reset() { place.value = ''; type.value = ''; issuesOnly.value = false; expandedKeys.value.clear(); }
 watch(() => props.personKey, reset);
 watch(places, (values) => { if (!values.includes(place.value)) place.value = ''; });
 watch(types, (values) => { if (!values.includes(type.value)) type.value = ''; });
@@ -56,7 +60,7 @@ watch(types, (values) => { if (!values.includes(type.value)) type.value = ''; })
         </thead>
         <tbody>
           <template v-for="group in filtered" :key="group.key">
-            <tr :class="{ expanded: expandedKey === group.key }">
+            <tr :class="{ expanded: expandedKeys.has(group.key) }">
               <td class="standard-dates">
                 <span v-for="range in group.dates.split('、')" :key="range" class="date-range">{{ range }}</span>
               </td><td>{{ group.row.place }}</td>
@@ -77,13 +81,13 @@ watch(types, (values) => { if (!values.includes(type.value)) type.value = ''; })
               </td>
               <td>{{ group.row.controlType }}</td><td>{{ group.row.schemeId || group.row.schemeCode }}</td>
               <td>
-                <button class="detail-toggle" type="button" :aria-expanded="expandedKey === group.key" @click="toggleDetail(group.key)">
-                  {{ expandedKey === group.key ? '收起明细' : '查看明细' }} <span class="record-count">{{ group.rows.length }}</span>
+                <button class="detail-toggle" type="button" :aria-expanded="expandedKeys.has(group.key)" @click="toggleDetail(group.key)">
+                  {{ expandedKeys.has(group.key) ? '收起明细' : '查看明细' }} <span class="record-count">{{ group.rows.length }}</span>
                 </button>
               </td>
             </tr>
-            <tr v-if="expandedKey === group.key" class="detail-row">
-              <td :colspan="legacy ? 9 : 8">
+            <tr v-if="expandedKeys.has(group.key)" class="detail-row">
+              <td :colspan="legacy ? 8 : 7">
                 <section class="standard-detail" aria-label="差旅标准明细">
                   <div class="detail-heading">
                     <strong>{{ group.row.standardName }} · {{ group.row.place }}</strong><span class="muted">共 {{ group.rows.length }} 条适用记录</span>
@@ -91,8 +95,7 @@ watch(types, (values) => { if (!values.includes(type.value)) type.value = ''; })
                   <div class="date-records">
                     <span v-for="(row, index) in group.rows" :key="index" class="date-record">{{ row.date }}</span>
                   </div>
-                  <details class="raw-rule">
-                    <summary>查看原始规则与缓存来源</summary>
+                  <LazyDetails class="raw-rule" summary="查看原始规则与缓存来源">
                     <div class="raw-columns">
                       <div><strong>原始规则</strong><pre>{{ JSON.stringify(group.row.raw, null, 2) }}</pre></div><div>
                         <strong>缓存来源</strong><ul>
@@ -102,7 +105,7 @@ watch(types, (values) => { if (!values.includes(type.value)) type.value = ''; })
                         </ul>
                       </div>
                     </div>
-                  </details>
+                  </LazyDetails>
                 </section>
               </td>
             </tr>
@@ -147,7 +150,7 @@ watch(types, (values) => { if (!values.includes(type.value)) type.value = ''; })
 .date-records { display: flex; flex-wrap: wrap; gap: 8px; }
 .date-record { padding: 5px 10px; border-radius: 6px; background: #f3f5f9; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .raw-rule { margin-top: 14px; padding-top: 12px; border-top: 1px solid #eceef3; }
-.raw-rule summary { color: #667086; }
+.raw-rule :deep(summary) { color: #667086; }
 .raw-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; margin-top: 12px; }
 .raw-columns li { overflow-wrap: anywhere; }
 

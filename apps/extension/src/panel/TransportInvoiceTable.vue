@@ -3,9 +3,23 @@ import { ref, watch } from 'vue';
 import type { TravelViewModel } from '@zfs-boe-inspector/core';
 import TravelSeatStandard from './TravelSeatStandard.vue';
 const props = defineProps<{ rows: TravelViewModel['transportInvoices']; personKey: string }>();
-const expandedKey = ref('');
-function toggle(key: string) { expandedKey.value = expandedKey.value === key ? '' : key; }
-watch(() => props.personKey, () => { expandedKey.value = ''; });
+const expandedKeys = ref(new Set<string>());
+function toggle(key: string) {
+  if (expandedKeys.value.has(key)) expandedKeys.value.delete(key);
+  else expandedKeys.value.add(key);
+}
+watch(() => props.personKey, () => { expandedKeys.value.clear(); });
+function controlName(value: string): string {
+  return ({ ALLOW: '允许', WARNING: '警告', FORBID: '禁止' } as Record<string, string>)[value] || value;
+}
+function submitValidation(row: TravelViewModel['transportInvoices'][number]): string {
+  if (row.status === 'unmatched') return '提交不校验（未命中规则）';
+  if (row.status !== 'matched') return '提交校验待确认';
+  if (row.controlType === 'WARNING') return '提交校验（警告）';
+  if (row.controlType === 'FORBID') return '提交校验（禁止）';
+  if (row.controlType === 'ALLOW') return '提交不校验（允许）';
+  return '提交校验待确认';
+}
 </script>
 
 <template>
@@ -15,24 +29,24 @@ watch(() => props.personKey, () => { expandedKey.value = ''; });
       <thead><tr><th>发票行 / 航段</th><th>人员</th><th>出行日期</th><th>到达城市</th><th>发票坐席</th><th>核对结果</th><th>控制方式</th></tr></thead>
       <tbody>
         <template v-for="row in rows" :key="row.key">
-          <tr :class="{ expanded: expandedKey === row.key }">
+          <tr :class="{ expanded: expandedKeys.has(row.key) }">
             <td>{{ row.source }}</td><td>{{ row.employeeName }}</td><td class="trip-date">
               {{ row.date }}
             </td><td>{{ row.city }}</td><td>{{ row.seat }}</td>
             <td>
               <span class="result-label" :class="{ 'result-error': row.status === 'missing' || row.status === 'unmatched', 'result-neutral': row.status !== 'missing' && row.status !== 'unmatched' }">{{ row.result }}</span>
-              <button class="detail-toggle" type="button" :aria-expanded="expandedKey === row.key" @click="toggle(row.key)">
-                {{ expandedKey === row.key ? '收起核对详情' : '查看核对详情' }}
+              <button class="detail-toggle" type="button" :aria-expanded="expandedKeys.has(row.key)" @click="toggle(row.key)">
+                {{ expandedKeys.has(row.key) ? '收起核对详情' : '查看核对详情' }}
               </button>
             </td>
             <td>
-              <span :class="{ 'text-error': row.controlType === 'FORBID' }">{{ row.controlType }}</span>
+              <span :class="{ 'text-error': row.controlType === 'FORBID' }">{{ submitValidation(row) }}</span>
               <div v-if="row.candidateControlTypes?.length" class="candidate-control">
-                候选：{{ row.candidateControlTypes.join(' / ') }}（未命中）
+                候选标准：{{ row.candidateControlTypes.map(controlName).join(' / ') }}（未命中）
               </div>
             </td>
           </tr>
-          <tr v-if="expandedKey === row.key" class="detail-row">
+          <tr v-if="expandedKeys.has(row.key)" class="detail-row">
             <td colspan="7">
               <section class="seat-comparison" aria-label="交通坐席核对详情">
                 <div class="comparison-heading">
@@ -57,7 +71,7 @@ watch(() => props.personKey, () => { expandedKey.value = ''; });
                     <div v-if="row.standardCandidates?.length" class="standard-options">
                       <div v-for="(standard, index) in row.standardCandidates" :key="index" class="standard-option">
                         <div class="candidate-heading">
-                          规则 {{ index + 1 }} · {{ standard.controlType }}
+                          规则 {{ index + 1 }} · {{ controlName(standard.controlType) }}
                         </div>
                         <TravelSeatStandard :transportation="standard.transportation" :transportation-name="standard.transportationName" />
                       </div>
@@ -89,11 +103,11 @@ watch(() => props.personKey, () => { expandedKey.value = ''; });
 .control-col { width: 190px; }
 .invoice-seat-table th, .trip-date { white-space: nowrap; }
 .invoice-seat-table td { overflow-wrap: anywhere; }
-.result-label { display: inline-block; padding: 5px 9px; border-radius: 6px; font-weight: 600; font-size: 13px; }
-.result-error { color: #b63232; background: #fff0ef; border: 1px solid #f1cdca; }
-.result-neutral { color: #49556b; background: #f0f3f8; }
-.detail-toggle { display: block; padding: 5px 0 0; border: 0; background: transparent; color: #315ac7; font-size: 12px; }
-.candidate-control { color: #667086; margin-top: 6px; font-size: 12px; line-height: 1.5; }
+.result-label { display: inline; font: inherit; }
+.result-error { color: #b63232; }
+.result-neutral { color: inherit; }
+.detail-toggle { display: block; padding: 5px 0 0; border: 0; background: transparent; color: #315ac7; font: inherit; }
+.candidate-control { color: #667086; margin-top: 6px; font: inherit; }
 .expanded > td, .detail-row > td { background: #f8faff; }
 .detail-row > td { padding: 0 12px 12px; }
 .seat-comparison { padding: 16px; background: #fff; border: 1px solid #dfe6f3; border-radius: 8px; }
