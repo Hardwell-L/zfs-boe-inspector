@@ -440,7 +440,14 @@ const DYNAMIC_KEYS = ['show', 'edit', 'requireSet', 'formShow', 'formRequire'] a
 export function buildDynamicDiagnostics(snapshot: BoeInspectionSnapshot): RuleDiagnosticModel {
   const fields = collectTemplateFields(snapshot);
   const knownFields = knownFieldReferences(snapshot, fields);
-  const states = snapshot.config.fieldRuntimeStates ?? [];
+  const statesByField = new Map<string, Map<number, NonNullable<typeof snapshot.config.fieldRuntimeStates>[number]>>();
+  for (const state of snapshot.config.fieldRuntimeStates ?? []) {
+    const key = JSON.stringify([state.areaCode, state.fieldCode]);
+    const rows = statesByField.get(key) ?? new Map();
+    // 与原先 find 一致：重复身份保留第一条。
+    if (!rows.has(state.rowIndex)) rows.set(state.rowIndex, state);
+    statesByField.set(key, rows);
+  }
   const entries: RuleDiagnosticEntry[] = [];
   const truncatedAreas = new Map<string, RuleDiagnosticModel['truncatedAreas'][number]>();
 
@@ -481,19 +488,19 @@ export function buildDynamicDiagnostics(snapshot: BoeInspectionSnapshot): RuleDi
 
   for (const item of fields) {
     const configured = DYNAMIC_KEYS.filter((key) => item.field[key] !== undefined && item.field[key] !== '');
-    const matchingStates = states.filter(({ areaCode, fieldCode }) => areaCode === item.areaCode && fieldCode === item.fieldCode);
-    if (configured.length === 0 && matchingStates.length === 0) continue;
+    const matchingStates = statesByField.get(JSON.stringify([item.areaCode, item.fieldCode]));
+    if (configured.length === 0 && !matchingStates?.size) continue;
     const count = rowCount(snapshot, item.areaCode);
     const displayed = Math.min(count, MAX_ROWS_PER_AREA);
     if (count > displayed) truncatedAreas.set(item.areaCode, { areaCode: item.areaCode, totalRows: count, displayedRows: displayed });
+    const parseErrors = configured.flatMap((key) => {
+      const parsed = parseStructured(item.field[key]);
+      return parsed.error ? [`${key} JSON 无效：${parsed.error}`] : [];
+    });
+    const dependencies = [...new Set(configured.flatMap((key) => extractReferences(item.field[key], item.areaCode)))];
+    const missing = missingReferences(dependencies, knownFields);
     for (let rowIndex = 0; rowIndex < displayed; rowIndex += 1) {
-      const runtime = matchingStates.find((state) => state.rowIndex === rowIndex);
-      const parseErrors = configured.flatMap((key) => {
-        const parsed = parseStructured(item.field[key]);
-        return parsed.error ? [`${key} JSON 无效：${parsed.error}`] : [];
-      });
-      const dependencies = [...new Set(configured.flatMap((key) => extractReferences(item.field[key], item.areaCode)))];
-      const missing = missingReferences(dependencies, knownFields);
+      const runtime = matchingStates?.get(rowIndex);
       const errors = [
         ...parseErrors,
         ...(missing.length > 0 ? [`引用字段不存在：${missing.join('、')}`] : []),

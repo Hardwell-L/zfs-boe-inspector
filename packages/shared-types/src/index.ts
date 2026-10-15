@@ -56,7 +56,24 @@ export interface TravelStandardRequest {
   status?: 'pending' | 'fulfilled' | 'rejected' | 'unknown';
 }
 
+export interface TravelCollectionState {
+  status: 'complete' | 'partial' | 'unavailable';
+  reasons: string[];
+}
+
+export interface TravelPersonInspection {
+  key: string;
+  person: NonNullable<TravelInspectionData['currentPerson']>;
+  collection: TravelCollectionState;
+  data: Omit<TravelInspectionData, 'mode' | 'persons'>;
+}
+
 export interface TravelInspectionData {
+  mode?: 'multi';
+  persons?: TravelPersonInspection[];
+  collection?: TravelCollectionState;
+  requestEvidence?: 'cache';
+  diagnostics?: { elapsedMs: number; nodes: number; characters: number; reads: Record<string, number> };
   inspectionMode?: 'legacy';
   queryConditions?: JsonValue;
   billSummary?: JsonValue;

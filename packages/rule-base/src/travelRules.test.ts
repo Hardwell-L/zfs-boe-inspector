@@ -39,3 +39,33 @@ describe('差旅规则', () => {
     expect(issueIds).toContain('TRAVEL_CONTROL_AGGREGATE_MISMATCH');
   });
 });
+
+describe('多人差旅规则', () => {
+  it('同日人员隔离，并允许方案结果复用而没有当日请求缓存', () => {
+    const snapshot = createSnapshot();
+    snapshot.travel = {
+      mode: 'multi', collection: { status: 'complete', reasons: [] },
+      persons: ['E1', 'E2'].map((id) => ({
+        key: id, person: { employeeId: id }, collection: { status: 'complete', reasons: [] },
+        data: {
+          requestEvidence: 'cache', calendarData: [{ expenseDate: '2026-10-02', travelSite: '武汉' }],
+          standardRequests: [{ boeDate: '2026-10-01' }],
+          standardResults: { '武汉_2026-10-02': [{ standardAmount: 100 }] },
+          travelerNames: [id], claimantNames: ['报账人'],
+        },
+      })),
+    };
+    const results = evaluateTravelRules(snapshot);
+    expect(results.filter((item) => item.status === 'issue')).toEqual([]);
+    expect(results.filter((item) => item.ruleId === 'TRAVEL_STANDARD_DATE_MISMATCH').every((item) => item.status === 'skipped')).toBe(true);
+    expect(results.some((item) => item.evidencePaths.some((path) => path.startsWith('travel.persons.1.data')))).toBe(true);
+  });
+
+  it('不完整人员不会产生通过或确定性问题', () => {
+    const snapshot = createSnapshot();
+    snapshot.travel = { mode: 'multi', persons: [{
+      key: 'E1', person: { employeeId: 'E1' }, data: {}, collection: { status: 'partial', reasons: ['预算截断'] },
+    }], collection: { status: 'partial', reasons: [] } };
+    expect(evaluateTravelRules(snapshot).every((item) => item.status === 'skipped')).toBe(true);
+  });
+});

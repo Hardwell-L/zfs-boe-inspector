@@ -4,6 +4,7 @@ import {
   buildDynamicDiagnostics,
   buildValidationDiagnostics,
   type RuleDiagnosticModel,
+  type RuleDiagnostics,
 } from '@zfs-boe-inspector/core';
 import type { BoeInspectionSnapshot, RuleEvaluation } from '@zfs-boe-inspector/shared-types';
 import { issue, jsonValue, passed, skipped } from './helpers';
@@ -50,4 +51,10 @@ export function evaluateDynamicRules(snapshot: BoeInspectionSnapshot): RuleEvalu
 
 export function evaluateApplyBoeRules(snapshot: BoeInspectionSnapshot): RuleEvaluation[] {
   return evaluate(buildApplyBoeDiagnostics(snapshot));
+}
+
+/** 由调用方绑定当前快照，避免诊断与报告重复构建；不缓存跨快照数据。 */
+export function diagnosticEvaluators(models: RuleDiagnostics) {
+  return [models.validation, models.calculation, models.dynamic, models.applyBoe]
+    .map((model) => () => evaluate(model));
 }

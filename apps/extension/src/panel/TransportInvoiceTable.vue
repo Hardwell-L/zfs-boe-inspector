@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { TravelViewModel } from '@zfs-boe-inspector/core';
+import TablePager from './TablePager.vue';
+import { useTablePage } from './useTablePage';
 import TravelSeatStandard from './TravelSeatStandard.vue';
 const props = defineProps<{ rows: TravelViewModel['transportInvoices']; personKey: string }>();
+const pagination = useTablePage(() => props.rows, computed(() => props.personKey));
 const expandedKeys = ref(new Set<string>());
 function toggle(key: string) {
   if (expandedKeys.value.has(key)) expandedKeys.value.delete(key);
@@ -28,7 +31,7 @@ function submitValidation(row: TravelViewModel['transportInvoices'][number]): st
       <colgroup><col class="source-col"><col class="person-col"><col class="date-col"><col class="city-col"><col><col class="result-col"><col class="control-col"></colgroup>
       <thead><tr><th>发票行 / 航段</th><th>人员</th><th>出行日期</th><th>到达城市</th><th>发票坐席</th><th>核对结果</th><th>控制方式</th></tr></thead>
       <tbody>
-        <template v-for="row in rows" :key="row.key">
+        <template v-for="row in pagination.rows.value" :key="row.key">
           <tr :class="{ expanded: expandedKeys.has(row.key) }">
             <td>{{ row.source }}</td><td>{{ row.employeeName }}</td><td class="trip-date">
               {{ row.date }}
@@ -91,6 +94,7 @@ function submitValidation(row: TravelViewModel['transportInvoices'][number]): st
       </tbody>
     </table>
   </div>
+  <TablePager v-model="pagination.page.value" :total="rows.length" />
 </template>
 
 <style scoped>

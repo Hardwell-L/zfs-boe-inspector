@@ -7,7 +7,7 @@ import { formatLocalDateTime } from './time';
 import { TraceViewCache, mergeTraceUpdate, traceCursor, traceGroups, traceTime } from './traceView';
 import TraceEventCard from './TraceEventCard.vue';
 
-const props = defineProps<{ instanceId: string; supported: boolean; pageId: string; incremental: boolean; valuesSupported: boolean; legacyTraceUnavailable?: boolean }>();
+const props = defineProps<{ active: boolean; instanceId: string; supported: boolean; pageId: string; incremental: boolean; valuesSupported: boolean; legacyTraceUnavailable?: boolean }>();
 const unsupportedMessage = computed(() => props.legacyTraceUnavailable
   ? '当前项目处于低版本兼容模式，默认不支持过程记录。'
   : '当前 Adapter 不支持过程记录，请升级 Adapter。');
@@ -79,7 +79,7 @@ function accept(result: TraceSession | undefined, reset = false) {
 }
 
 async function read() {
-  if (reading || busy.value || !props.supported || !props.pageId || disposed) return;
+  if (reading || busy.value || !props.active || !props.supported || !props.pageId || disposed) return;
   reading = true;
   const run = generation;
   const instanceId = props.instanceId;
@@ -125,15 +125,20 @@ async function action(kind: 'start' | 'stop' | 'clear') {
   finally { busy.value = false; if (run !== generation && !disposed) void read(); }
 }
 
-watch(() => [props.instanceId, props.supported, props.pageId], () => {
-  generation += 1;
-  accept(undefined);
+function syncPolling() {
   if (timer) clearInterval(timer);
-  if (props.supported && props.pageId) {
+  if (props.active && props.supported && props.pageId) {
     void read();
     timer = setInterval(() => { if (session.value?.active) void read(); }, 1000);
   }
+}
+watch(() => [props.instanceId, props.supported, props.pageId], () => {
+  generation += 1;
+  accept(undefined);
+  syncPolling();
 }, { immediate: true });
+// 隐藏时停止拉取，保留会话和游标，重新打开只取增量。
+watch(() => props.active, () => { generation += 1; syncPolling(); });
 onBeforeUnmount(() => { disposed = true; generation += 1; cache.clear(); if (timer) clearInterval(timer); if (filterTimer) window.clearTimeout(filterTimer); });
 </script>
 

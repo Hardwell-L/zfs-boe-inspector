@@ -1,3 +1,4 @@
+export { diagnosticEvaluators } from './ruleDiagnostics';
 export { evaluateFieldRules } from './fieldRules';
 export { evaluateTravelRules } from './travelRules';
 export {

@@ -7,7 +7,7 @@ import {
 } from './collector';
 import { attachBillTemplateInspector, attachTravelInspector, installBoeInspector } from './index';
 import { SharedRegistrationPool } from './sharedRegistration';
-import { findTravelOwner } from './travelOwner';
+import { findTravelOwner, isMultiTravelOwner } from './travelOwner';
 import { isSupportedBoeVersion } from './boeVersion';
 
 declare const process: { env?: { NODE_ENV?: string } } | undefined;
@@ -125,7 +125,7 @@ function collectorOptions(options: AdapterOptions) {
 }
 
 function hasTravelData(component: TravelComponentLike): boolean {
-  return component.standardAmount != null || component.standardDates != null
+  return isMultiTravelOwner(component) || component.standardAmount != null || component.standardDates != null
     || component.travelList != null || Array.isArray(component.data?.zfsBoeCalendarDTOS)
     || 'calendarData' in component;
 }

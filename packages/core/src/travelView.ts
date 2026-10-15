@@ -141,7 +141,7 @@ function calendarRows(travel: TravelInspectionData): TravelCalendarRow[] {
   const source = (travel.calendarData?.length ? travel.calendarData : travel.trips) ?? [];
   const rows = source.flatMap((item) => {
     const record = asRecord(item);
-    if (!record || (travel.inspectionMode === 'legacy' && record.__kind)) return [];
+    if (!record || ((travel.inspectionMode === 'legacy' || travel.collection) && record.__kind)) return [];
     const row: TravelCalendarRow = {
       date: dateFrom(record) || '—',
       travelSite: firstText(record, ['travelSite', 'destination', 'cityName']) || '—',
@@ -172,15 +172,20 @@ export function buildTravelView(travel?: TravelInspectionData): TravelViewModel 
   const resultDates = new Set(standards.map(({ date }) => date).filter((date) => date !== '—'));
   const requests = (travel?.standardRequests ?? []).map((request) => ({
     ...request,
-    matched: Boolean(request.boeDate && resultDates.has(request.boeDate.slice(0, 10))),
+    matched: Boolean(typeof request.boeDate === 'string' && resultDates.has(request.boeDate.slice(0, 10))),
   }));
+  const standardsByDate = new Map<string, Map<string, typeof standards>>();
+  for (const standard of standards) {
+    const places = standardsByDate.get(standard.date) ?? new Map();
+    const rows = places.get(standard.place) ?? [];
+    rows.push(standard); places.set(standard.place, rows);
+    standardsByDate.set(standard.date, places);
+  }
   for (const row of calendar) {
-    const candidates = standards.filter((standard) => {
-      if (standard.date !== row.date) return false;
-      return standard.place === '—'
-        || row.staySite === standard.place
-        || row.travelSite === standard.place;
-    });
+    if (travel?.collection && travel.collection.status !== 'complete') continue;
+    const places = standardsByDate.get(row.date);
+    const candidates = [...new Set(['—', row.staySite, row.travelSite])]
+      .flatMap((place) => places?.get(place) ?? []);
     if (candidates.length === 0) {
       row.matchStatus = standards.length > 0 ? 'unmatched' : 'unverified';
       continue;
@@ -203,7 +208,7 @@ export function buildTravelView(travel?: TravelInspectionData): TravelViewModel 
     { label: '人员', satisfied: Boolean(person?.employeeId || person?.employeeName), value: person?.employeeName ?? person?.employeeId ?? '未识别' },
     { label: '日期', satisfied: calendar.some(({ date }) => date !== '—'), value: `${new Set(calendar.map(({ date }) => date).filter((date) => date !== '—')).size} 天` },
     { label: '地点', satisfied: calendar.some(({ travelSite, staySite }) => travelSite !== '—' || staySite !== '—'), value: calendar.map(({ travelSite, staySite }) => staySite !== '—' ? staySite : travelSite).filter((value) => value !== '—').join('、') || '未识别' },
-    { label: '标准请求', satisfied: requests.length > 0, value: `${requests.length} 条` },
+    { label: travel?.requestEvidence === 'cache' ? '请求缓存' : '标准请求', satisfied: requests.length > 0, value: `${requests.length} 条` },
   ];
   return {
     transportInvoicesCollected: Array.isArray(travel?.transportInvoices),
@@ -228,7 +233,9 @@ export function buildTravelView(travel?: TravelInspectionData): TravelViewModel 
       matchedRows,
       unmatchedRows,
       exceededRows,
-      conclusion: prerequisites.some(({ satisfied }) => !satisfied)
+      conclusion: travel?.collection && travel.collection.status !== 'complete'
+        ? '当前人员采集不完整，仅展示已有数据，不判定最终匹配或超标准。'
+        : prerequisites.some(({ satisfied }) => !satisfied)
         ? '标准匹配前置条件不完整，请先核对人员、日期、地点和请求参数。'
         : unmatchedRows > 0
           ? `有 ${unmatchedRows} 行未匹配到差旅标准。`

@@ -61,6 +61,26 @@ function addPassed(results: RuleEvaluation[]): RuleEvaluation[] {
 
 export function evaluateTravelRules(snapshot: BoeInspectionSnapshot): RuleEvaluation[] {
   const travel = snapshot.travel;
+  if (travel?.mode === 'multi') {
+    const results = (travel.persons ?? []).flatMap((person, index) => {
+      const path = `travel.persons.${index}.data`;
+      const personTravel = { ...person.data };
+      delete personTravel.travelerNames;
+      delete personTravel.claimantNames;
+      const evaluations = person.collection.status !== 'complete'
+        ? TRAVEL_RULE_IDS.map((id) => skipped(id, 'travel-standard', '人员采集不完整，无法确定性判定', [path]))
+        : evaluateTravelRules({ ...snapshot, travel: personTravel });
+      return evaluations.map((evaluation) => ({
+        ...evaluation,
+        summary: `${person.person.employeeName || person.person.employeeId}（${person.person.employeeId || '身份未提供'} / ${person.person.postId || '岗位未提供'}）：${evaluation.summary}`,
+        evidencePaths: evaluation.evidencePaths.map((value) => value.replace(/^travel(?=\.|$)/, path)),
+      }));
+    });
+    if (travel.collection?.status !== 'complete' || !travel.persons?.length) {
+      results.push(skipped('TRAVEL_COLLECTION_INCOMPLETE', 'travel-standard', '多人差旅结果不完整，问题数量不代表整张单据', ['travel.collection']));
+    }
+    return results;
+  }
   if (!travel) {
     return TRAVEL_RULE_IDS.map((ruleId) => skipped(
       ruleId,
@@ -123,7 +143,7 @@ export function evaluateTravelRules(snapshot: BoeInspectionSnapshot): RuleEvalua
   const requestsAvailable = Array.isArray(travel.standardRequests);
   const requests = travel.standardRequests ?? [];
   const requestDates = new Set(requests.map(({ boeDate }) => boeDate?.slice(0, 10)).filter((date): date is string => Boolean(date)));
-  if (requestsAvailable) {
+  if (requestsAvailable && travel.requestEvidence !== 'cache') {
     for (const date of new Set(validDates)) {
       if (!requestDates.has(date)) {
         results.push(issue(
@@ -147,7 +167,7 @@ export function evaluateTravelRules(snapshot: BoeInspectionSnapshot): RuleEvalua
     .map((value) => typeof value === 'string' ? value.slice(0, 10) : dateFrom(value))
     .filter((date): date is string => Boolean(date)));
   if (resultsAvailable) {
-    for (const date of new Set([...requestDates, ...cachedDates])) {
+    for (const date of new Set([...(travel.requestEvidence === 'cache' ? [] : requestDates), ...cachedDates])) {
       if (!resultDates.has(date)) {
         results.push(issue(
           'TRAVEL_STANDARD_RESULT_MISSING',
@@ -160,7 +180,7 @@ export function evaluateTravelRules(snapshot: BoeInspectionSnapshot): RuleEvalua
       }
     }
   }
-  if (resultsAvailable && requestsAvailable) {
+  if (resultsAvailable && requestsAvailable && travel.requestEvidence !== 'cache') {
     for (const date of resultDates) {
       if (requestDates.size > 0 && !requestDates.has(date)) {
         results.push(issue(
@@ -294,6 +314,11 @@ export function evaluateTravelRules(snapshot: BoeInspectionSnapshot): RuleEvalua
     results.push(skipped('TRAVELER_CLAIMANT_MISMATCH', 'travel-standard', 'Snapshot 未同时提供出行人员与报账人员，无法比对', ['travel.travelerNames', 'travel.claimantNames']));
   }
 
+  if (travel.requestEvidence === 'cache') {
+    for (const id of ['TRAVEL_STANDARD_REQUEST_MISSING', 'TRAVEL_STANDARD_DATE_MISMATCH']) {
+      results.push(skipped(id, 'travel-standard', '请求缓存可能复用方案，不据缓存日期判断请求缺失或日期异常', ['travel.standardRequests']));
+    }
+  }
   if (!requestsAvailable) results.push(skipped('TRAVEL_STANDARD_REQUEST_MISSING', 'travel-standard', '当前版本未提供标准请求历史，无法检查日期请求覆盖', ['travel.standardRequests']));
   if (!resultsAvailable) {
     results.push(skipped('TRAVEL_STANDARD_RESULT_MISSING', 'travel-standard', '当前版本未提供标准结果缓存，无法检查结果覆盖', ['travel.standardResults']));

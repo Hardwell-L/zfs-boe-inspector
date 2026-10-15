@@ -40,3 +40,7 @@ export function findTravelOwner(
 
   return undefined;
 }
+
+export function isMultiTravelOwner(component: BillTemplateComponentLike): boolean {
+  return getComponentName(component) === 'MULTITRAVELBOE';
+}

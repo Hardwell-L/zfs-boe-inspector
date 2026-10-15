@@ -180,3 +180,23 @@ describe('规则诊断纯解析器', () => {
     expect(mapping).toMatchObject({ id: 'APPLY_BOE_MAPPING_UNVERIFIED', state: 'unverified' });
   });
 });
+
+
+it('动态索引保留重复运行态的第一条，并且不同区域的同名字段不串行', () => {
+  const input = snapshot();
+  input.config.template = [
+    { areaCode: 'a', areaFields: [{ fieldCode: 'x' }, { fieldCode: 'x' }] },
+    { areaCode: 'b', areaFields: [{ fieldCode: 'x' }] },
+  ];
+  input.runtime.rawBillData = { a: [{ x: 1 }], b: [{ x: 2 }] };
+  input.config.fieldRuntimeStates = [
+    { areaCode: 'a', fieldCode: 'x', rowIndex: 0, visible: true },
+    { areaCode: 'a', fieldCode: 'x', rowIndex: 0, visible: false, evaluationError: '不应命中' },
+    { areaCode: 'b', fieldCode: 'x', rowIndex: 0, visible: false },
+  ];
+  const entries = buildDynamicDiagnostics(input).entries;
+  expect(entries).toHaveLength(3);
+  expect(entries.every((entry) => entry.state === 'ok')).toBe(true);
+  expect(entries.filter((entry) => entry.areaCode === 'a').every((entry) => entry.detail.includes('显示 是'))).toBe(true);
+  expect(entries.find((entry) => entry.areaCode === 'b')?.detail).toContain('显示 否');
+});

@@ -107,7 +107,7 @@ export function buildTransportInvoiceRows(travel?: TravelInspectionData): Transp
       } else if (!seatCode.trim()) {
         row.status = 'missing'; row.result = '坐席缺失';
         row.evidence += 'seatLevel 为空，无法进行交通标准匹配。';
-      } else if (travel.inspectionMode === 'legacy' || !knownPerson || !city.trim() || !date(tripDate)
+      } else if ((travel.collection && travel.collection.status !== 'complete') || travel.inspectionMode === 'legacy' || !knownPerson || !city.trim() || !date(tripDate)
         || [cityValue, dateValue, code, bill.billTypeInvoice, bill.flightStatus].some(incomplete)) {
         row.evidence += '人员、日期或地点关联未确认，或仅有低版本候选缓存，不判定最终匹配。';
         const legacyCandidates = travel.inspectionMode === 'legacy' ? travel.standardResults?.[city] : undefined;

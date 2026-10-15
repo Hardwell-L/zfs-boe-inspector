@@ -1,4 +1,4 @@
-import { buildRuleDiagnostics, type RuleDiagnosticEntry } from '@zfs-boe-inspector/core';
+import { buildRuleDiagnostics, type RuleDiagnostics, type RuleDiagnosticEntry } from '@zfs-boe-inspector/core';
 import type { BoeInspectionSnapshot, InspectionSelection, RuleEvaluation, TraceSession } from '@zfs-boe-inspector/shared-types';
 
 export type EvidenceGroup = 'context' | 'selected' | 'dependencies' | 'diagnostics' | 'trace' | 'knowledge';
@@ -95,7 +95,7 @@ function currentValue(snapshot: BoeInspectionSnapshot, areaCode: string, field: 
 
 export function buildAiEvidence(
   snapshot: BoeInspectionSnapshot, selections: InspectionSelection[], evaluations: RuleEvaluation[], trace?: TraceSession,
-  options: { includeFormattedDto?: boolean } = {},
+  options: { includeFormattedDto?: boolean; diagnostics?: RuleDiagnostics } = {},
 ): AiEvidence[] {
   const evidence: AiEvidence[] = [];
   const byPath = new Map<string, AiEvidence>();
@@ -127,7 +127,7 @@ export function buildAiEvidence(
   });
   const directConfig = (area: string, field: string, fieldIndex: number) => all || selections.some((scope) => scope.kind !== 'bill' && scope.areaCode === area
     && (scope.kind === 'area' || scope.fieldCode === field && (scope.fieldIndex === undefined || scope.fieldIndex === fieldIndex)));
-  const diagnostics: RuleDiagnosticEntry[] = Object.values(buildRuleDiagnostics(snapshot)).flatMap((model) => model.entries);
+  const diagnostics: RuleDiagnosticEntry[] = Object.values(options.diagnostics ?? buildRuleDiagnostics(snapshot)).flatMap((model) => model.entries);
   // 始终与用户原始范围匹配，补充的依赖不会再触发下一轮规则扩散。
   const related = diagnostics.filter((entry) => direct(entry.areaCode ?? '', entry.fieldCode, entry.rowIndex)
     || entry.dependencyDetails?.some((dependency) => direct(dependency.areaCode, dependency.fieldCode)

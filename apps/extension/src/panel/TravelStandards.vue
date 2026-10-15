@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { TravelStandardRow } from '@zfs-boe-inspector/core';
+import TablePager from './TablePager.vue';
+import { useTablePage } from './useTablePage';
 import TravelSeatStandard from './TravelSeatStandard.vue';
 import LazyDetails from './LazyDetails.vue';
 import { groupStandards } from './travelStandardGroups';
@@ -24,6 +26,7 @@ const types = computed(() => [...new Set(props.rows.map((row) => row.standardNam
 const groups = computed(() => groupStandards(props.rows));
 const filtered = computed(() => groups.value.filter(({ row }) => (!place.value || row.place === place.value)
   && (!type.value || row.standardName === type.value) && (!issuesOnly.value || row.dataIssue)));
+const pagination = useTablePage(() => filtered.value, computed(() => JSON.stringify([props.personKey, place.value, type.value, issuesOnly.value])));
 const visibleCount = computed(() => filtered.value.reduce((total, group) => total + group.rows.length, 0));
 const issueCount = computed(() => props.rows.filter((row) => row.dataIssue).length);
 function reset() { place.value = ''; type.value = ''; issuesOnly.value = false; expandedKeys.value.clear(); }
@@ -59,7 +62,7 @@ watch(types, (values) => { if (!values.includes(type.value)) type.value = ''; })
           </tr>
         </thead>
         <tbody>
-          <template v-for="group in filtered" :key="group.key">
+          <template v-for="group in pagination.rows.value" :key="group.key">
             <tr :class="{ expanded: expandedKeys.has(group.key) }">
               <td class="standard-dates">
                 <span v-for="range in group.dates.split('、')" :key="range" class="date-range">{{ range }}</span>
@@ -116,6 +119,7 @@ watch(types, (values) => { if (!values.includes(type.value)) type.value = ''; })
     <p v-else class="tab-empty">
       没有符合筛选条件的标准。
     </p>
+    <TablePager v-model="pagination.page.value" :total="filtered.length" />
   </div>
   <p v-else class="tab-empty">
     当前人员尚未采集到差旅标准结果。

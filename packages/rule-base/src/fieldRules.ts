@@ -230,6 +230,18 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
     ));
   }
 
+  const duplicatesByField = new Map<string, typeof fields>();
+  for (const item of fields) {
+    const key = JSON.stringify([item.areaIndex, item.fieldCode]);
+    const group = duplicatesByField.get(key) ?? [];
+    group.push(item); duplicatesByField.set(key, group);
+  }
+  const firstRowStates = new Map<string, NonNullable<typeof snapshot.config.fieldRuntimeStates>[number]>();
+  for (const state of snapshot.config.fieldRuntimeStates ?? []) {
+    const key = JSON.stringify([state.areaCode, state.fieldCode]);
+    if (state.rowIndex === 0 && !firstRowStates.has(key)) firstRowStates.set(key, state);
+  }
+
   for (const item of fields) {
     const { areaCode, fieldCode, field, path } = item;
     const identity = `${areaCode}.${fieldCode}`;
@@ -240,7 +252,7 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
 
     results.push(...evaluateColorSet(field, path, identity));
 
-    const duplicates = fields.filter((candidate) => candidate.areaIndex === item.areaIndex && candidate.fieldCode === fieldCode);
+    const duplicates = duplicatesByField.get(JSON.stringify([item.areaIndex, fieldCode]))!;
     if (duplicates.length > 1 && duplicates[0]?.path === path) {
       results.push(issue(
         'FIELD_DUPLICATE_IN_AREA',
@@ -315,9 +327,7 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
       }
     }
 
-    const runtimeState = snapshot.config.fieldRuntimeStates?.find((state) => (
-      state.areaCode === areaCode && state.fieldCode === fieldCode && state.rowIndex === 0
-    ));
+    const runtimeState = firstRowStates.get(JSON.stringify([areaCode, fieldCode]));
     if (runtimeState?.evaluationError) {
       results.push(issue(
         'FIELD_DYNAMIC_CONFIG_INVALID',

@@ -10,6 +10,8 @@ import {
   type TravelInspectionData,
 } from '@zfs-boe-inspector/shared-types';
 import { toSerializable, type SerializeOptions } from './serialize';
+import { collectMultiTravel } from './multiTravel';
+import { isMultiTravelOwner } from './travelOwner';
 import type { TraceConditionResolver } from './trace';
 
 export interface AdapterOptions {
@@ -82,6 +84,8 @@ export interface BillTemplateCollectorOptions {
 }
 
 export interface TravelComponentLike extends BillTemplateComponentLike {
+  personList?: Record<string, unknown>[];
+  $refs?: Record<string, TravelComponentLike | TravelComponentLike[]>;
   standardParams?: Record<string, unknown>;
   calendarData?: unknown[];
   person?: Record<string, unknown>;
@@ -388,6 +392,7 @@ export function createTravelCollector(
     getInstanceId: () => options.getInstanceId?.() ?? deriveInstanceId(component, options.legacyMode),
     getBoeTypeCode: () => getMeta(component).boeTypeCode,
     collect: () => {
+      if (isMultiTravelOwner(component)) return { meta: getMeta(component), travel: collectMultiTravel(component, options) };
       if (options.legacyMode) return collectLegacyTravel(component, options);
       const requests = requestMetadata(component);
       const invoiceEmployeeId = transportInvoiceEmployeeId(component);

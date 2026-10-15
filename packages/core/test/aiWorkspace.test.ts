@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAiWorkspace, type AiAnswer, type AiSource } from '../../../apps/extension/src/panel/useAiWorkspace';
 import { createRedactor } from '../../../apps/extension/src/panel/aiContext';
-import { saveAiHistory } from '../../../apps/extension/src/panel/aiHistory';
+import { loadAiHistory, saveAiHistory } from '../../../apps/extension/src/panel/aiHistory';
 vi.mock('../../../apps/extension/src/panel/aiHistory', async (original) => ({
-  ...await original<object>(), saveAiHistory: vi.fn().mockResolvedValue(true),
+  ...await original<object>(), loadAiHistory: vi.fn().mockResolvedValue([]), saveAiHistory: vi.fn().mockResolvedValue(true),
 }));
+vi.mock('../../../apps/extension/src/panel/knowledgeStore', () => ({ listKnowledge: vi.fn().mockResolvedValue([]) }));
 const source: AiSource = {
   pageId: 'page', evaluations: [], snapshot: {
     schemaVersion: 1, instanceId: 'bill', capturedAt: '2026-09-24T00:00:00Z',
@@ -17,6 +18,7 @@ function setup() {
   const workspace = useAiWorkspace(async () => source);
   workspace.state.settingsReady = true; workspace.state.settings.key = 'test-key';
   workspace.setSource(source);
+  workspace.create();
   const session = workspace.current!;
   workspace.setScopes(session, [{ kind: 'field', areaCode: 'header', fieldCode: 'name', rowIndex: 0 }]);
   session.draft = '解释字段';
@@ -125,5 +127,26 @@ describe('大文本脱敏回归', () => {
   it('长残缺邮箱不会反复从局部起点匹配，后面的有效邮箱仍脱敏', () => {
     const text = `${'a'.repeat(150_000)}@${'b'.repeat(150_000)} valid@example.com`;
     expect(createRedactor()(text)).toBe(`${'a'.repeat(150_000)}@${'b'.repeat(150_000)} [脱敏1]`);
+  });
+});
+
+
+describe('AI 按需初始化', () => {
+  it('刷新来源不会自动复制快照、创建会话或读取历史，进入 AI 后才初始化且只读一次历史', async () => {
+    vi.mocked(loadAiHistory).mockClear();
+    const workspace = useAiWorkspace(async () => source);
+    workspace.state.settingsReady = true;
+    workspace.setSource(source);
+    workspace.setSource({ ...source });
+    expect(workspace.current).toBeUndefined();
+    expect(workspace.state.sessions).toHaveLength(0);
+    expect(loadAiHistory).not.toHaveBeenCalled();
+    workspace.activate();
+    await tick();
+    expect(workspace.state.sessions).toHaveLength(1);
+    expect(workspace.current?.source.snapshot).toEqual(source.snapshot);
+    expect(workspace.current?.source.snapshot).not.toBe(source.snapshot);
+    workspace.activate();
+    expect(loadAiHistory).toHaveBeenCalledTimes(1);
   });
 });

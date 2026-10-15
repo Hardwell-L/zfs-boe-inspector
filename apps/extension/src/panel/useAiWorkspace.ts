@@ -1,3 +1,4 @@
+import type { RuleDiagnostics } from '@zfs-boe-inspector/core';
 import { computed, markRaw, onBeforeUnmount, reactive, watch } from 'vue';
 import type { BoeInspectionSnapshot, InspectionSelection, RuleEvaluation, TraceSession } from '@zfs-boe-inspector/shared-types';
 import { AI_SYSTEM_PROMPT, buildAiEvidence, createRedactor, scopeIdentity, scopeLabel, type AiEvidence } from './aiContext';
@@ -9,7 +10,7 @@ import { KNOWLEDGE_LIMITS, knowledgeQuery, type KnowledgeHit } from './knowledge
 import { listKnowledge, searchKnowledge } from './knowledgeStore';
 import { knowledgeRevision, useKnowledgeBase } from './useKnowledgeBase';
 
-export interface AiSource { snapshot: BoeInspectionSnapshot; evaluations: RuleEvaluation[]; pageId: string }
+export interface AiSource { snapshot: BoeInspectionSnapshot; evaluations: RuleEvaluation[]; pageId: string; diagnostics?: RuleDiagnostics }
 export type FrozenEvidence = ReturnType<typeof sentEvidence>[number] & Pick<AiEvidence, 'kind' | 'group'> & { selection?: InspectionSelection };
 export interface AiAnswer {
   id: number; context: number; sentAt: string; capturedAt: string; question: string; answer: string;
@@ -51,6 +52,9 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
   let requestSequence = 0;
   let testSequence = 0;
   let disposed = false;
+  let activated = false;
+  let historyStarted = false;
+  let historyLoading = false;
   const historySecrets = new Set<string>();
   const historyTimers = new Map<string, number>();
   const historyWrites = new Map<string, Promise<void>>();
@@ -130,7 +134,8 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     } finally { state.historyDeleting = ''; }
   }
   async function reloadHistory() {
-    if (!state.historyReady || state.historySaving || state.historyDeleting) return;
+    if (historyLoading || state.historySaving || state.historyDeleting) return;
+    historyLoading = true;
     state.historyReady = false;
     try {
       const saved = await loadAiHistory();
@@ -144,13 +149,13 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
       state.history = [...entries.values()];
       if (!failedHistory.size) state.historyError = '';
     } catch (reason) { state.historyError = message(reason); }
-    finally { state.historyReady = true; }
+    finally { state.historyReady = true; historyLoading = false; }
   }
 
   function rebuild(session: AiSession) {
     const previous = new Map(session.evidence.map((item) => [evidenceIdentity(item), item]));
     const source = session.source;
-    const evidence = buildAiEvidence(source.snapshot, session.scopes, source.evaluations, session.trace, { includeFormattedDto: session.includeFormattedDto });
+    const evidence = buildAiEvidence(source.snapshot, session.scopes, source.evaluations, session.trace, { includeFormattedDto: session.includeFormattedDto, ...(source.diagnostics ? { diagnostics: source.diagnostics } : {}) });
     const event = session.trace?.events.find((item) => item.id === session.eventId);
     if (event) {
       const existing = evidence.find((item) => item.path === `trace.events.${event.id}`);
@@ -166,24 +171,37 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     }
     session.evidence = evidence;
   }
+  function frozenSource(source: AiSource): AiSource {
+    const { diagnostics, ...data } = source;
+    return markRaw({ ...clone(data), ...(diagnostics ? { diagnostics } : {}) });
+  }
+  function activate() {
+    activated = true;
+    if (!state.sessions.length && state.source) create();
+    if (!historyStarted) {
+      historyStarted = true;
+      void reloadHistory();
+      void knowledge.reload().then(() => { if (!state.sessions.length && state.source) create(); });
+    }
+  }
   function setSource(source: AiSource | undefined) {
     if (!source || (state.source && state.source.pageId !== source.pageId)) {
       // 无业务 ID 的草稿无法在断连/页面变化后证明仍是同一张单据。
       const sessions = state.closed ? [...state.sessions, state.closed.session] : state.sessions;
       for (const session of sessions) if (session.source.snapshot.instanceId.endsWith(':active')) session.staleDraft = true;
     }
-    state.source = source;
+    state.source = source ? markRaw(source) : undefined;
     if (state.request) {
       const owner = state.sessions.find((session) => session.id === state.request?.sessionId);
       if (!owner || !available(owner)) stop();
     }
-    if (source && !state.sessions.length) create();
+    if (activated && source && !state.sessions.length) create();
   }
   function create(scopes: InspectionSelection[] = [], trace?: TraceSession, eventId = '', source = state.source) {
     if (!source || busy.value || state.pickerSessionId || disposed) return;
     const id = ++sessionSequence;
     state.sessions.push({ id, title: `新会话 ${id}`, customTitle: false, historyId: crypto.randomUUID(), createdAt: new Date().toISOString(), binding: sourceIdentity(source),
-      source: clone(source), draft: eventId ? '分析所选报错或过程，说明相关字段、原因、缺失证据及验证方法。' : '',
+      source: frozenSource(source), draft: eventId ? '分析所选报错或过程，说明相关字段、原因、缺失证据及验证方法。' : '',
       scopes: clone(scopes), trace: trace ? clone(trace) : undefined, eventId, includeFormattedDto: false,
       evidence: [], answers: [], context: 0, basis: '', conditionsChanged: false, redact: createRedactor(), error: '', note: '',
       scrollTop: 0, followLatest: true, collapsed: false, staleDraft: false,
@@ -369,7 +387,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     const source = await readSource(session);
     if (!live(request)) return false;
     if (sourceIdentity(source) !== session.binding || !available(session)) throw new Error('页面或单据已变化，请刷新插件并新建会话');
-    session.source = clone(source); state.source = source; rebuild(session); return true;
+    session.source = frozenSource(source); state.source = markRaw(source); rebuild(session); return true;
   }
   async function refresh(session: AiSession) {
     const request = acquire(session);
@@ -466,14 +484,13 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     }
   }, { flush: 'sync' });
   async function load() {
-    const [settings, history] = await Promise.allSettled([loadAiSettings(), loadAiHistory()]);
+    try { state.settings = await loadAiSettings(); }
+    catch (reason) { if (!disposed) state.settingsError = message(reason); }
     if (disposed) return;
-    if (settings.status === 'fulfilled') state.settings = settings.value; else state.settingsError = message(settings.reason);
-    if (history.status === 'fulfilled') state.history = history.value; else state.historyError = message(history.reason);
-    state.settingsReady = true; state.historyReady = true;
-    if (!state.sessions.length && state.source) create();
-    void knowledge.reload();
+    state.settingsReady = true;
+    if (activated && !state.sessions.length && state.source) create();
   }
+
   async function save(clearKey = false) {
     if (busy.value) return;
     state.saving = true; state.settingsError = ''; state.settingsNote = '';
@@ -498,7 +515,7 @@ export function useAiWorkspace(readSource: (session: AiSession) => Promise<AiSou
     stop(); disposed = true; testSequence += 1;
     for (const session of state.sessions) if (historyTimers.has(session.historyId)) persist(session);
   });
-  const workspace = { state, current, busy, configured, available, mutable, setSource, create, select, rename, close, undoClose, stop,
+  const workspace = { state, current, busy, configured, available, mutable, setSource, activate, create, select, rename, close, undoClose, stop,
     knowledge, changeKnowledge, setKnowledgeEnabled, setKnowledgeQuery, toggleKnowledgeHit,
     findKnowledge, knowledgeBytes, knowledgeStale,
     retryHistory, reloadHistory, historyUnsaved, deleteHistory, historyDisabled,

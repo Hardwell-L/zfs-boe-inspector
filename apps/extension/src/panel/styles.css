@@ -72,11 +72,6 @@ h1, h2, h3, p { margin-top: 0; }
 .property-group dd.structured-property { min-width: 0; }
 .tab-empty { padding: 24px; border: 1px dashed #d8dce6; border-radius: 8px; background: #fafbfc; color: #7c8598; text-align: center; }
 .raw-field-config pre { max-height: calc(100vh - 230px); }
-.travel-metrics { margin-bottom: 12px; }
-.person-card { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-bottom: 24px; overflow: hidden; border: 1px solid #e1e3ea; border-radius: 9px; background: #e1e3ea; }
-.person-card div { min-width: 0; padding: 12px; background: #fff; }
-.person-card span { display: block; margin-bottom: 5px; color: #788196; }
-.person-card strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .section > h3 { margin-top: 24px; }
 .table-scroll { width: 100%; overflow-x: auto; margin-bottom: 18px; border: 1px solid #e1e3ea; border-radius: 8px; background: #fff; }
 .data-table { width: 100%; min-width: 680px; border-collapse: collapse; }
@@ -124,23 +119,43 @@ h1, h2, h3, p { margin-top: 0; }
 .dependency-value-content { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; text-align: left; }
 .dependency-value-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; }
 .evidence-title { margin: 14px 0 6px; font-weight: 600; }
-.travel-business-summary { margin-bottom: 14px; padding: 14px; border: 1px solid #e1e3ea; border-radius: 9px; background: #fff; }
-.travel-business-summary h3 { margin-bottom: 8px; }
-.prerequisite-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
-.prerequisite-grid div { min-width: 0; padding: 9px; border-radius: 6px; background: #def7e8; }
-.prerequisite-grid div.missing { background: #fff0f0; }
-.prerequisite-grid span, .prerequisite-grid strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.prerequisite-grid span { margin-bottom: 4px; color: #687187; }
+.travel-person-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
+.travel-person-toolbar label { color: #596278; font-weight: 600; }
+.travel-person-toolbar select { box-sizing: border-box; flex: 0 1 360px; min-width: 0; max-width: 100%; min-height: 38px; padding: 8px 32px 8px 12px; border: 1px solid #d8dce8; border-radius: 8px; background-color: #fff; color: #252b3b; font: inherit; text-overflow: ellipsis; cursor: pointer; }
+.travel-person-toolbar select:focus-visible { outline: 2px solid #6254e7; outline-offset: 2px; }
+.travel-person-count { padding: 4px 9px; border-radius: 12px; background: #eeecfb; color: #635a9d; font-size: 12px; white-space: nowrap; }
+.travel-business-summary { margin-bottom: 24px; padding: 18px; border: 1px solid #e1e3ea; border-radius: 10px; background: #fff; }
+.travel-summary-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.travel-summary-heading h3 { margin: 0; }
+.travel-person-post { color: #687187; font-size: 12px; }
+.travel-summary-conclusion { margin: 10px 0 16px; line-height: 1.6; }
+.prerequisite-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0 0 14px; }
+.prerequisite-grid.legacy { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.prerequisite-grid > div { min-width: 0; padding: 12px; border: 1px solid #eceef4; border-radius: 8px; background: #f7f8fb; }
+.prerequisite-grid > div.missing { border-color: #f1d5d5; background: #fff5f5; }
+.prerequisite-grid span, .prerequisite-grid strong { display: block; overflow-wrap: anywhere; }
+.prerequisite-grid span { margin-bottom: 7px; color: #687187; font-size: 12px; }
+.prerequisite-grid strong { font-size: 15px; line-height: 1.4; }
+.travel-summary-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 20px; color: #687187; font-size: 12px; }
+.travel-summary-status p { margin: 0; }
+.travel-match-counts { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.travel-cache-count { margin-left: auto; }
+.travel-person-details { margin-top: 14px; padding-top: 12px; border-top: 1px solid #eceef3; }
+.travel-person-details summary { cursor: pointer; color: #687187; font-size: 12px; }
+.travel-person-details dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 24px; margin: 14px 0 0; }
+.travel-person-details dt { margin-bottom: 4px; color: #788196; font-size: 12px; }
+.travel-person-details dd { margin: 0; overflow-wrap: anywhere; }
 .text-error { color: #b63232; font-weight: 600; }
 
 @media (max-width: 900px) {
   .workspace { grid-template-columns: 130px minmax(0, 1fr); }
   .field-layout { grid-template-columns: 250px minmax(0, 1fr); }
-  .person-card { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .prerequisite-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .prerequisite-grid, .prerequisite-grid.legacy { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 600px) {
+  .travel-person-details dl { grid-template-columns: minmax(0, 1fr); }
+  .travel-person-toolbar select { flex: 1 1 180px; }
   .topbar { align-items: flex-start; flex-direction: column; gap: 8px; }
   .topbar > div { width: 100%; flex-wrap: wrap; }
   .actions { display: grid !important; grid-template-columns: 1fr 1fr; }

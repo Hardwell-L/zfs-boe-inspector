@@ -6,8 +6,10 @@ import {
   buildTravelView,
   runInspection,
   type RuleDiagnosticEntry,
+  type RuleDiagnostics,
 } from '@zfs-boe-inspector/core';
-import { baseRuleEvaluators } from '@zfs-boe-inspector/rule-base';
+import { diagnosticEvaluators, evaluateFieldRules, evaluateTravelRules } from '@zfs-boe-inspector/rule-base';
+import { getAreaDetail, getFieldDetail } from '../../../../packages/adapter-vue3/src/fieldInspector';
 import type {
   AreaDetail,
   DependencyDetail,
@@ -27,6 +29,8 @@ import { scopeIdentity } from './aiContext';
 import { useAiWorkspace, sourceIdentity, type AiSession } from './useAiWorkspace';
 import AiPanel from './AiPanel.vue';
 import TracePanel from './TracePanel.vue';
+import TablePager from './TablePager.vue';
+import { useTablePage } from './useTablePage';
 import TravelStandards from './TravelStandards.vue';
 import LazyDetails from './LazyDetails.vue';
 import TransportInvoiceTable from './TransportInvoiceTable.vue';
@@ -66,6 +70,7 @@ const onlyRuleIssues = ref(false);
 const showRuleTechnical = ref(false);
 const aiWorkspace = useAiWorkspace(refreshAiSnapshot);
 const aiBusy = computed(() => aiWorkspace.busy);
+watch(view, (value) => { if (value === 'ai') aiWorkspace.activate(); });
 const pickerDestination = ref<'fields' | 'ai'>('fields');
 let pickerRun = 0;
 let pickerInstanceId = '';
@@ -175,11 +180,25 @@ const propertyFieldNames = computed(() => {
   }
   return names;
 });
-const travelView = computed(() => buildTravelView(snapshot.value?.travel));
+const travelPersonKey = ref('');
+const travelPersons = computed(() => snapshot.value?.travel?.persons ?? []);
+watch(() => [snapshot.value?.instanceId, snapshot.value?.meta.projectCode, travelPersons.value] as const, (value, previous) => {
+  if (!previous || value[0] !== previous[0] || value[1] !== previous[1] || !travelPersons.value.some((person) => person.key === travelPersonKey.value)) {
+    travelPersonKey.value = travelPersons.value[0]?.key ?? '';
+  }
+}, { immediate: true });
+const selectedTravelPerson = computed(() => travelPersons.value.find((person) => person.key === travelPersonKey.value));
+const activeTravel = computed(() => snapshot.value?.travel?.mode === 'multi' ? selectedTravelPerson.value?.data : snapshot.value?.travel);
+const activeTravelKey = computed(() => `${snapshot.value?.instanceId}:${travelPersonKey.value}:${activeTravel.value?.currentPerson?.employeeId}`);
+// 分页观察器也会访问展示模型；非差旅页不展开和匹配人员的整份标准。
+const travelView = computed(() => buildTravelView(view.value === 'travel' ? activeTravel.value : undefined));
+const calendarPage = useTablePage(() => travelView.value.calendar, activeTravelKey);
+const requestPage = useTablePage(() => travelView.value.requests, activeTravelKey);
 const legacyPersonRows = computed(() => travelView.value.legacy && travelView.value.person.employeeId
   ? travelView.value.calendar.filter((row) => row.employeeId === travelView.value.person.employeeId)
   : []);
-const ruleDiagnostics = computed(() => snapshot.value ? buildRuleDiagnostics(snapshot.value) : undefined);
+const legacyPage = useTablePage(() => legacyPersonRows.value, activeTravelKey);
+const ruleDiagnostics = shallowRef<RuleDiagnostics>();
 const activeRuleModel = computed(() => {
   const model = ruleDiagnostics.value?.[ruleTab.value];
   return model && ruleTab.value === 'dynamic' ? dynamicDisplayModel(model) : model;
@@ -226,6 +245,7 @@ async function refresh() {
       resetSelection();
       snapshot.value = undefined;
       report.value = undefined;
+      ruleDiagnostics.value = undefined;
       aiWorkspace.setSource(undefined);
       return;
     }
@@ -236,18 +256,20 @@ async function refresh() {
     if (epoch !== pageEpoch) return;
     if (snapshot.value && (snapshot.value.instanceId !== next.instanceId || snapshot.value.meta.projectCode !== next.meta.projectCode)) resetSelection();
     snapshot.value = next;
-    report.value = runInspection(snapshot.value, baseRuleEvaluators);
+    ruleDiagnostics.value = buildRuleDiagnostics(next);
+    report.value = runInspection(next, [evaluateFieldRules, evaluateTravelRules, ...diagnosticEvaluators(ruleDiagnostics.value)]);
     activeInstanceId.value = next.instanceId;
-    aiWorkspace.setSource({ snapshot: next, evaluations: report.value.evaluations, pageId });
+    aiWorkspace.setSource({ snapshot: next, evaluations: report.value.evaluations, diagnostics: ruleDiagnostics.value, pageId });
     if (selectedArea.value) {
-      selectedArea.value = await pageBridge.getAreaDetail(selectedArea.value.areaCode, activeInstanceId.value);
+      selectedArea.value = getAreaDetail(next, selectedArea.value.areaCode);
     }
     if (selectedField.value) {
-      await selectField(selectedField.value.selection);
+      selectedField.value = getFieldDetail(next, selectedField.value.selection);
     }
   } catch (reason) {
     snapshot.value = undefined;
     report.value = undefined;
+    ruleDiagnostics.value = undefined;
     aiWorkspace.setSource(undefined);
     error.value = reason instanceof Error ? reason.message : String(reason);
   } finally {
@@ -465,8 +487,9 @@ async function openAiConversation(selection?: InspectionSelection, append = fals
 async function refreshAiSnapshot(session: AiSession, forPicker = false) {
   if (loading.value || (pickerActive.value && !forPicker)) throw new Error('请等待当前读取或页面选择结束');
   const { snapshot: next, pageId } = await pageBridge.getAiSnapshot(session.source.snapshot.instanceId, session.source.pageId);
-  const nextReport = runInspection(next, baseRuleEvaluators);
-  return { snapshot: next, evaluations: nextReport.evaluations, pageId };
+  const diagnostics = buildRuleDiagnostics(next);
+  const nextReport = runInspection(next, [evaluateFieldRules, evaluateTravelRules, ...diagnosticEvaluators(diagnostics)]);
+  return { snapshot: next, evaluations: nextReport.evaluations, diagnostics, pageId };
 }
 
 async function locateAiSelection(selection: InspectionSelection) {
@@ -934,120 +957,161 @@ onBeforeUnmount(() => {
             当前实例未注册差旅 Collector。
           </div>
           <template v-else>
-            <article class="travel-business-summary">
-              <h3>业务摘要</h3>
-              <p>{{ travelView.businessSummary.conclusion }}</p>
-              <div class="prerequisite-grid">
-                <div v-for="item in travelView.businessSummary.prerequisites" :key="item.label" :class="{ missing: !item.satisfied }">
-                  <span>{{ item.label }}</span><strong>{{ item.value }}</strong>
-                </div>
+            <template v-if="snapshot.travel.mode === 'multi'">
+              <div class="travel-person-toolbar">
+                <label for="travel-person-select">出行人员</label>
+                <select id="travel-person-select" v-model="travelPersonKey" :disabled="!travelPersons.length">
+                  <option v-for="(person, index) in travelPersons" :key="person.key" :value="person.key">
+                    {{ index + 1 }}. {{ person.person.employeeName || '未命名人员' }}{{ person.person.postName ? ` · ${person.person.postName}` : '' }}
+                  </option>
+                </select>
+                <span class="travel-person-count">共 {{ travelPersons.length }} 人</span>
               </div>
-              <p v-if="!travelView.legacy" class="muted">
-                已匹配 {{ travelView.businessSummary.matchedRows }} 行；未匹配 {{ travelView.businessSummary.unmatchedRows }} 行；超标准 {{ travelView.businessSummary.exceededRows }} 行。
+              <p v-if="!travelPersons.length" class="tab-empty">
+                未识别到出行人员。
               </p>
-            </article>
-            <div class="metric-grid travel-metrics">
-              <article><span>当前人员</span><strong>{{ travelView.person.employeeName || '未识别' }}</strong></article>
-              <article><span>行程天数</span><strong>{{ travelView.metrics.travelDays }}</strong></article>
-              <article><span>标准条目</span><strong>{{ travelView.metrics.standardCount }}</strong></article>
-              <article><span>请求命中</span><strong v-if="travelView.legacy">未采集历史</strong><strong v-else>{{ travelView.metrics.matchedRequestCount }}/{{ travelView.metrics.requestCount }}</strong></article>
-            </div>
+              <p v-if="snapshot.travel.collection?.status !== 'complete'" class="warnings">
+                多人差旅结果不完整，问题数量仅覆盖已采集数据。{{ snapshot.travel.collection?.reasons.join('；') }}
+              </p>
+              <p v-if="selectedTravelPerson?.collection.status !== 'complete'" class="warnings">
+                {{ selectedTravelPerson?.collection.reasons.join('；') }}
+              </p>
+            </template>
+            <template v-if="activeTravel">
+              <article class="travel-business-summary">
+                <div class="travel-summary-heading">
+                  <h3>业务摘要</h3>
+                  <span v-if="travelView.person.postName" class="travel-person-post">{{ travelView.person.postName }}</span>
+                </div>
+                <p class="travel-summary-conclusion">
+                  {{ travelView.businessSummary.conclusion }}
+                </p>
+                <div class="prerequisite-grid" :class="{ legacy: travelView.legacy }">
+                  <div v-for="item in travelView.businessSummary.prerequisites" :key="item.label" :class="{ missing: !item.satisfied }">
+                    <span>{{ item.label === '日期' ? '行程天数' : item.label }}</span><strong :title="item.value">{{ item.value }}</strong>
+                  </div>
+                  <div v-if="!travelView.legacy">
+                    <span>标准条目</span><strong>{{ travelView.metrics.standardCount }} 条</strong>
+                  </div>
+                </div>
+                <div class="travel-summary-status">
+                  <p v-if="!travelView.legacy" class="travel-match-counts">
+                    <span>已匹配 <strong>{{ travelView.businessSummary.matchedRows }}</strong> 行</span>
+                    <span :class="{ 'text-error': travelView.businessSummary.unmatchedRows > 0 }">未匹配 <strong>{{ travelView.businessSummary.unmatchedRows }}</strong> 行</span>
+                    <span :class="{ 'text-error': travelView.businessSummary.exceededRows > 0 }">超标准 <strong>{{ travelView.businessSummary.exceededRows }}</strong> 行</span>
+                  </p>
+                  <p class="travel-cache-count">
+                    {{ activeTravel.requestEvidence === 'cache' ? '缓存结果关联' : '请求命中' }}：
+                    <strong v-if="travelView.legacy">未采集历史</strong>
+                    <strong v-else-if="snapshot.travel.mode === 'multi' && !activeTravel.standardRequests">未采集缓存</strong>
+                    <strong v-else>{{ travelView.metrics.matchedRequestCount }}/{{ travelView.metrics.requestCount }}</strong>
+                  </p>
+                </div>
+                <LazyDetails :key="activeTravelKey" class="travel-person-details" summary="人员详情 · 查看完整身份信息">
+                  <dl>
+                    <div><dt>姓名</dt><dd>{{ travelView.person.employeeName || '—' }}</dd></div>
+                    <div><dt>岗位</dt><dd>{{ travelView.person.postName || '—' }}</dd></div>
+                    <div><dt>人员 ID</dt><dd>{{ travelView.person.employeeId || '—' }}</dd></div>
+                    <div><dt>岗位 ID</dt><dd>{{ travelView.person.postId || '—' }}</dd></div>
+                  </dl>
+                </LazyDetails>
+              </article>
 
-            <article class="person-card">
-              <div><span>姓名</span><strong>{{ travelView.person.employeeName || '—' }}</strong></div>
-              <div><span>人员 ID</span><strong>{{ travelView.person.employeeId || '—' }}</strong></div>
-              <div><span>岗位</span><strong>{{ travelView.person.postName || '—' }}</strong></div>
-              <div><span>岗位 ID</span><strong>{{ travelView.person.postId || '—' }}</strong></div>
-            </article>
+              <template v-if="travelView.legacy">
+                <h3>当前人员逐行差旅标准</h3>
+                <p class="muted">
+                  仅展示行内人员 ID 与当前人员一致的记录。页面计算金额来自宿主当前缓存，请求历史及最终超标结论仍待核验。
+                </p>
+                <div v-if="legacyPersonRows.length" class="table-scroll">
+                  <table class="data-table">
+                    <thead><tr><th>日期</th><th>地点</th><th>业务类型</th><th>已填金额</th><th>页面计算标准</th><th>依据</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(row, index) in legacyPage.rows.value" :key="`${row.date}-${index}`">
+                        <td>{{ row.date }}</td><td>{{ row.travelSite }}</td><td>{{ row.businessType || '—' }}</td>
+                        <td>{{ amountValue(row.amount) }}</td><td>{{ amountValue(row.pageStandardAmount) }}</td>
+                        <td>{{ row.pageStandardAmount !== undefined ? '宿主逐日计算，缓存来源待核验' : row.candidateCount ? `${row.candidateCount} 条候选，条件未完整核验` : '暂无可用标准' }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p v-else class="tab-empty">
+                  当前行程未提供与当前人员 ID 一致的记录。
+                </p>
 
-            <template v-if="travelView.legacy">
-              <h3>当前人员逐行差旅标准</h3>
+                <TablePager v-model="legacyPage.page.value" :total="legacyPersonRows.length" />
+                <h3>当前标准查询条件</h3>
+                <p class="muted">
+                  这些是当前页面条件，不代表历史请求参数，也不能证明缓存仍与当前人员一致。
+                </p>
+                <pre v-if="activeTravel.queryConditions">{{ pretty(activeTravel.queryConditions) }}</pre>
+                <p v-else class="tab-empty">
+                  当前项目未提供标准查询条件。
+                </p>
+              </template>
+
+              <h3>{{ travelView.legacy ? '已采集的候选标准缓存' : '当前人员差旅标准' }}</h3>
+              <TravelStandards :rows="travelView.standards" :legacy="Boolean(travelView.legacy)" :person-key="activeTravelKey" :format-amount="amountValue" />
+
+              <h3>交通发票坐席核对</h3>
               <p class="muted">
-                仅展示行内人员 ID 与当前人员一致的记录。页面计算金额来自宿主当前缓存，请求历史及最终超标结论仍待核验。
+                依据已采集数据展示本项坐席标准的提交校验：警告需确认，禁止会拦截；允许或未命中规则时不拦截，不代表整张单据可提交。
               </p>
-              <div v-if="legacyPersonRows.length" class="table-scroll">
+              <p v-if="!travelView.transportInvoicesCollected" class="tab-empty">
+                未采集交通发票数据，请更新采集端并重新采集。
+              </p>
+              <TransportInvoiceTable v-else-if="travelView.transportInvoices.length" :rows="travelView.transportInvoices" :person-key="activeTravelKey" />
+              <p v-else class="tab-empty">
+                已采集的发票中暂无适用交通坐席核对的记录。
+              </p>
+
+              <h3>{{ travelView.legacy ? '已采集的行程明细' : '当前人员行程' }}</h3>
+              <div v-if="travelView.calendar.length" class="table-scroll">
                 <table class="data-table">
-                  <thead><tr><th>日期</th><th>地点</th><th>业务类型</th><th>已填金额</th><th>页面计算标准</th><th>依据</th></tr></thead>
+                  <thead><tr><th>日期</th><th>人员</th><th>出差地点</th><th>住宿地点</th><th>金额/补贴</th><th>标准匹配</th><th>超标准</th></tr></thead>
                   <tbody>
-                    <tr v-for="(row, index) in legacyPersonRows" :key="`${row.date}-${index}`">
-                      <td>{{ row.date }}</td><td>{{ row.travelSite }}</td><td>{{ row.businessType || '—' }}</td>
-                      <td>{{ amountValue(row.amount) }}</td><td>{{ amountValue(row.pageStandardAmount) }}</td>
-                      <td>{{ row.pageStandardAmount !== undefined ? '宿主逐日计算，缓存来源待核验' : row.candidateCount ? `${row.candidateCount} 条候选，条件未完整核验` : '暂无可用标准' }}</td>
+                    <tr v-for="(row, index) in calendarPage.rows.value" :key="`${row.date}-${index}`">
+                      <td>{{ row.date }}</td><td>{{ row.employeeName }}</td><td>{{ row.travelSite }}</td><td>{{ row.staySite }}</td><td>{{ amountValue(row.amount) }}</td>
+                      <td>{{ row.pageStandardAmount !== undefined ? `页面计算 ${amountValue(row.pageStandardAmount)}，待核验` : row.matchStatus === 'candidate' ? `${row.candidateCount} 条候选，待核验` : row.matchStatus === 'matched' ? amountValue(row.matchedStandardAmount) : row.matchStatus === 'unmatched' ? '未匹配' : '未验证' }}</td>
+                      <td :class="{ 'text-error': (row.overAmount ?? 0) > 0 }">
+                        {{ row.overAmount === undefined ? '—' : amountValue(row.overAmount) }}
+                      </td>
                     </tr>
                   </tbody>
                 </table>
               </div>
               <p v-else class="tab-empty">
-                当前行程未提供与当前人员 ID 一致的记录。
+                当前人员尚未采集到行程数据。
               </p>
 
-              <h3>当前标准查询条件</h3>
-              <p class="muted">
-                这些是当前页面条件，不代表历史请求参数，也不能证明缓存仍与当前人员一致。
+              <TablePager v-model="calendarPage.page.value" :total="travelView.calendar.length" />
+              <h3>{{ activeTravel.requestEvidence === 'cache' ? '标准请求缓存' : '标准请求状态' }}</h3>
+              <p v-if="activeTravel.requestEvidence === 'cache'" class="muted">
+                仅按缓存日期关联结果，不代表 HTTP 请求次数或成功率；方案复用可能没有当日请求缓存。
               </p>
-              <pre v-if="snapshot.travel.queryConditions">{{ pretty(snapshot.travel.queryConditions) }}</pre>
+              <div v-if="travelView.requests.length" class="table-scroll">
+                <table class="data-table">
+                  <thead><tr><th>日期</th><th>方案</th><th>缓存键</th><th>结果</th></tr></thead>
+                  <tbody>
+                    <tr v-for="(request, index) in requestPage.rows.value" :key="`${request.cacheKey}-${request.boeDate}-${index}`">
+                      <td>{{ request.boeDate || '—' }}</td><td>{{ request.schemeCode || '—' }}</td><td>{{ request.cacheKey || '—' }}</td>
+                      <td><span class="request-status" :class="{ matched: request.matched }">{{ activeTravel.requestEvidence === 'cache' ? (request.matched ? '存在同日结果' : '未关联同日结果') : (request.matched ? '已命中' : '未命中') }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
               <p v-else class="tab-empty">
-                当前项目未提供标准查询条件。
+                {{ travelView.legacy ? '低版本未提供标准请求历史，无法核对请求次数、请求日期和命中情况。' : '尚未采集到标准请求。' }}
               </p>
+
+              <TablePager v-model="requestPage.page.value" :total="travelView.requests.length" />
+              <LazyDetails v-if="travelView.legacy && activeTravel.standardDates?.length" class="raw-travel-data" summary="查看已有逐日标准结果（仅覆盖页面已计算的日期）">
+                <pre>{{ pretty(activeTravel.standardDates) }}</pre>
+              </LazyDetails>
+
+              <LazyDetails class="raw-travel-data" summary="查看原始差旅数据">
+                <pre>{{ pretty(activeTravel) }}</pre>
+              </LazyDetails>
             </template>
-
-            <h3>{{ travelView.legacy ? '已采集的候选标准缓存' : '当前人员差旅标准' }}</h3>
-            <TravelStandards :rows="travelView.standards" :legacy="Boolean(travelView.legacy)" :person-key="`${snapshot.instanceId}:${travelView.person.employeeId}`" :format-amount="amountValue" />
-
-            <h3>交通发票坐席核对</h3>
-            <p class="muted">
-              依据已采集数据展示本项坐席标准的提交校验：警告需确认，禁止会拦截；允许或未命中规则时不拦截，不代表整张单据可提交。
-            </p>
-            <p v-if="!travelView.transportInvoicesCollected" class="tab-empty">
-              未采集交通发票数据，请更新采集端并重新采集。
-            </p>
-            <TransportInvoiceTable v-else-if="travelView.transportInvoices.length" :rows="travelView.transportInvoices" :person-key="`${snapshot.instanceId}:${travelView.person.employeeId}`" />
-            <p v-else class="tab-empty">
-              已采集的发票中暂无适用交通坐席核对的记录。
-            </p>
-
-            <h3>{{ travelView.legacy ? '已采集的行程明细' : '当前人员行程' }}</h3>
-            <div v-if="travelView.calendar.length" class="table-scroll">
-              <table class="data-table">
-                <thead><tr><th>日期</th><th>人员</th><th>出差地点</th><th>住宿地点</th><th>金额/补贴</th><th>标准匹配</th><th>超标准</th></tr></thead>
-                <tbody>
-                  <tr v-for="(row, index) in travelView.calendar" :key="`${row.date}-${index}`">
-                    <td>{{ row.date }}</td><td>{{ row.employeeName }}</td><td>{{ row.travelSite }}</td><td>{{ row.staySite }}</td><td>{{ amountValue(row.amount) }}</td>
-                    <td>{{ row.pageStandardAmount !== undefined ? `页面计算 ${amountValue(row.pageStandardAmount)}，待核验` : row.matchStatus === 'candidate' ? `${row.candidateCount} 条候选，待核验` : row.matchStatus === 'matched' ? amountValue(row.matchedStandardAmount) : row.matchStatus === 'unmatched' ? '未匹配' : '未验证' }}</td>
-                    <td :class="{ 'text-error': (row.overAmount ?? 0) > 0 }">
-                      {{ row.overAmount === undefined ? '—' : amountValue(row.overAmount) }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <p v-else class="tab-empty">
-              当前人员尚未采集到行程数据。
-            </p>
-
-            <h3>标准请求状态</h3>
-            <div v-if="travelView.requests.length" class="table-scroll">
-              <table class="data-table">
-                <thead><tr><th>日期</th><th>方案</th><th>缓存键</th><th>结果</th></tr></thead>
-                <tbody>
-                  <tr v-for="(request, index) in travelView.requests" :key="`${request.cacheKey}-${request.boeDate}-${index}`">
-                    <td>{{ request.boeDate || '—' }}</td><td>{{ request.schemeCode || '—' }}</td><td>{{ request.cacheKey || '—' }}</td>
-                    <td><span class="request-status" :class="{ matched: request.matched }">{{ request.matched ? '已命中' : '未命中' }}</span></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <p v-else class="tab-empty">
-              {{ travelView.legacy ? '低版本未提供标准请求历史，无法核对请求次数、请求日期和命中情况。' : '尚未采集到标准请求。' }}
-            </p>
-
-            <LazyDetails v-if="travelView.legacy && snapshot.travel.standardDates?.length" class="raw-travel-data" summary="查看已有逐日标准结果（仅覆盖页面已计算的日期）">
-              <pre>{{ pretty(snapshot.travel.standardDates) }}</pre>
-            </LazyDetails>
-
-            <LazyDetails class="raw-travel-data" summary="查看原始差旅数据">
-              <pre>{{ pretty(snapshot.travel) }}</pre>
-            </LazyDetails>
           </template>
         </section>
 
@@ -1059,6 +1123,7 @@ onBeforeUnmount(() => {
 
         <TracePanel
           v-show="view === 'trace'"
+          :active="view === 'trace'"
           :incremental="status?.capabilities?.includes('trace-incremental') ?? false"
           :values-supported="status?.capabilities?.includes('trace-values') ?? false"
           :instance-id="activeInstanceId"
