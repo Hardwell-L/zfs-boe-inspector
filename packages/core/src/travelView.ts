@@ -1,3 +1,4 @@
+import { buildTransportInvoiceRows, type TransportInvoiceRow } from './transportSeats';
 import type { JsonValue, TravelInspectionData, TravelStandardRequest } from '@zfs-boe-inspector/shared-types';
 
 export interface TravelStandardRow {
@@ -11,6 +12,9 @@ export interface TravelStandardRow {
   schemeCode: string;
   schemeId?: string;
   transportation?: string;
+  transportationName?: string;
+  isTransportation: boolean;
+  dataIssue?: string;
   standardDiscount?: string;
   conditions?: string;
   raw: JsonValue;
@@ -38,6 +42,8 @@ export interface TravelRequestRow extends TravelStandardRequest {
 
 export interface TravelViewModel {
   legacy?: boolean;
+  transportInvoicesCollected: boolean;
+  transportInvoices: TransportInvoiceRow[];
   person: { employeeId: string; employeeName: string; postId: string; postName: string };
   standards: TravelStandardRow[];
   calendar: TravelCalendarRow[];
@@ -81,25 +87,37 @@ function keyIdentity(key: string): { place: string; date: string } {
   return { date, place: date ? key.slice(0, Math.max(0, key.indexOf(date) - 1)) : key };
 }
 
+function hasStandardMarker(value: JsonValue): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (!Array.isArray(value) && value.__kind) return value.__kind !== 'undefined';
+  return Object.values(value).some(hasStandardMarker);
+}
+
 function standardRows(travel: TravelInspectionData): TravelStandardRow[] {
   return Object.entries(travel.standardResults ?? {}).flatMap(([key, value]) => {
     const identity = keyIdentity(key);
     return (Array.isArray(value) ? value : [value]).flatMap((item) => {
       const record = asRecord(item);
-      if (!record || (travel.inspectionMode === 'legacy' && record.__kind)) return [];
+      if (!record) return [];
+      const incomplete = hasStandardMarker(item);
+      const name = firstText(record, ['operationSubTypeName', 'bizCategorySmallName', 'standardName', 'attributeName', 'standardType']);
+      const code = firstText(record, ['bizCategorySmallCode', 'operationSubTypeCode', 'attribute']);
       const row: TravelStandardRow = {
         key,
         place: firstText(record, ['staySite', 'travelSite', 'cityName', 'site']) || identity.place || '—',
         date: dateFrom(record) || identity.date || '—',
-        standardName: firstText(record, ['operationSubTypeName', 'bizCategorySmallName', 'standardName', 'attributeName', 'attribute', 'standardType']) || '未命名标准',
+        standardName: incomplete ? '标准数据未完整采集' : name || `名称缺失${code ? `（${code}）` : ''}`,
+        ...(incomplete ? { dataIssue: '标准包含引用、截断或不可读标记，请重新采集或查看原始记录。' } : !name ? { dataIssue: '标准名称缺失，请核对业务小类配置。' } : {}),
         currency: firstText(record, ['currencyName', 'currencyCode', 'currency']) || '—',
         controlType: firstText(record, ['controlTypeName', 'controlType', 'controlLevel']) || '—',
         schemeCode: firstText(record, ['schemeCode', 'standardSchemeCode']) || '—',
+        isTransportation: record.attribute === 'CLJT' || Boolean(record.transportation || record.transportationName),
+        ...(typeof record.transportation === 'string' ? { transportation: record.transportation } : {}),
+        transportationName: firstText(record, ['transportationName']),
         raw: item,
       };
       if (travel.inspectionMode === 'legacy') {
         row.schemeId = firstText(record, ['schemeId']);
-        row.transportation = firstText(record, ['transportation']);
         row.standardDiscount = firstText(record, ['standardDiscount']);
         const begin = Number(record.travelDayBegin);
         const end = Number(record.travelDayEnd);
@@ -188,6 +206,8 @@ export function buildTravelView(travel?: TravelInspectionData): TravelViewModel 
     { label: '标准请求', satisfied: requests.length > 0, value: `${requests.length} 条` },
   ];
   return {
+    transportInvoicesCollected: Array.isArray(travel?.transportInvoices),
+    transportInvoices: buildTransportInvoiceRows(travel),
     person: {
       employeeId: person?.employeeId ?? '',
       employeeName: person?.employeeName ?? '',
@@ -282,6 +302,8 @@ function buildLegacyTravelView(
   const calculatedRows = calendar.filter(({ pageStandardAmount }) => pageStandardAmount !== undefined).length;
   return {
     legacy: true,
+    transportInvoicesCollected: Array.isArray(travel?.transportInvoices),
+    transportInvoices: buildTransportInvoiceRows(travel),
     person: {
       employeeId: person?.employeeId ?? '', employeeName: person?.employeeName ?? '',
       postId: person?.postId ?? '', postName: person?.postName ?? '',

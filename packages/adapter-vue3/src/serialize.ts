@@ -1,6 +1,8 @@
 import type { JsonValue } from '@zfs-boe-inspector/shared-types';
 
 export interface SerializeOptions {
+  /** 展开非循环的共享引用；真实祖先循环仍保留标记。 */
+  expandSharedReferences?: boolean;
   maxDepth?: number;
   maxArrayLength?: number;
   maxObjectKeys?: number;
@@ -47,54 +49,57 @@ export function toSerializable(input: unknown, options: SerializeOptions = {}): 
     const previousPath = seen.get(value);
     if (previousPath) return { __kind: 'circular', reference: previousPath };
     seen.set(value, path);
-
-    if (Array.isArray(value)) {
-      const result: JsonValue[] = [];
-      for (let index = 0; index < Math.min(value.length, maxArrayLength); index += 1) {
-        if (nodes >= maxNodes) { result.push(budgetMarker()); break; }
-        result.push(visit(value[index], `${path}.${index}`, depth + 1));
+    try {
+      if (Array.isArray(value)) {
+        const result: JsonValue[] = [];
+        for (let index = 0; index < Math.min(value.length, maxArrayLength); index += 1) {
+          if (nodes >= maxNodes) { result.push(budgetMarker()); break; }
+          result.push(visit(value[index], `${path}.${index}`, depth + 1));
+        }
+        if (value.length > maxArrayLength) {
+          result.push({ __kind: 'truncated', reason: 'max-array-length', omitted: value.length - maxArrayLength });
+        }
+        return result;
       }
-      if (value.length > maxArrayLength) {
-        result.push({ __kind: 'truncated', reason: 'max-array-length', omitted: value.length - maxArrayLength });
+      if (value instanceof Map) {
+        const entries: JsonValue[] = [];
+        for (const [key, item] of value) {
+          if (entries.length >= maxArrayLength) break;
+          if (nodes >= maxNodes) { entries.push(budgetMarker()); break; }
+          entries.push([visit(key, `${path}.key${entries.length}`, depth + 1), visit(item, `${path}.value${entries.length}`, depth + 1)]);
+        }
+        return { __kind: 'map', entries };
+      }
+      if (value instanceof Set) {
+        const values: JsonValue[] = [];
+        for (const item of value) {
+          if (values.length >= maxArrayLength) break;
+          if (nodes >= maxNodes) { values.push(budgetMarker()); break; }
+          values.push(visit(item, `${path}.${values.length}`, depth + 1));
+        }
+        return { __kind: 'set', values };
+      }
+
+      const result: Record<string, JsonValue> = {};
+      let count = 0;
+      for (const key in value) {
+        if (!Object.hasOwn(value, key)) continue;
+        if (count >= maxObjectKeys || nodes >= maxNodes || key.length > maxStringLength || characters + key.length > maxTotalStringLength) {
+          result.__truncated__ = { __kind: 'truncated', reason: nodes >= maxNodes ? 'max-nodes' : count >= maxObjectKeys ? 'max-object-keys' : 'max-string-length' };
+          break;
+        }
+        count += 1;
+        characters += key.length;
+        try {
+          result[key] = visit((value as Record<string, unknown>)[key], `${path}.${key}`, depth + 1);
+        } catch (error) {
+          result[key] = { __kind: 'unreadable', message: text(error instanceof Error ? error.message : String(error)) };
+        }
       }
       return result;
+    } finally {
+      if (options.expandSharedReferences) seen.delete(value);
     }
-    if (value instanceof Map) {
-      const entries: JsonValue[] = [];
-      for (const [key, item] of value) {
-        if (entries.length >= maxArrayLength) break;
-        if (nodes >= maxNodes) { entries.push(budgetMarker()); break; }
-        entries.push([visit(key, `${path}.key${entries.length}`, depth + 1), visit(item, `${path}.value${entries.length}`, depth + 1)]);
-      }
-      return { __kind: 'map', entries };
-    }
-    if (value instanceof Set) {
-      const values: JsonValue[] = [];
-      for (const item of value) {
-        if (values.length >= maxArrayLength) break;
-        if (nodes >= maxNodes) { values.push(budgetMarker()); break; }
-        values.push(visit(item, `${path}.${values.length}`, depth + 1));
-      }
-      return { __kind: 'set', values };
-    }
-
-    const result: Record<string, JsonValue> = {};
-    let count = 0;
-    for (const key in value) {
-      if (!Object.hasOwn(value, key)) continue;
-      if (count >= maxObjectKeys || nodes >= maxNodes || key.length > maxStringLength || characters + key.length > maxTotalStringLength) {
-        result.__truncated__ = { __kind: 'truncated', reason: nodes >= maxNodes ? 'max-nodes' : count >= maxObjectKeys ? 'max-object-keys' : 'max-string-length' };
-        break;
-      }
-      count += 1;
-      characters += key.length;
-      try {
-        result[key] = visit((value as Record<string, unknown>)[key], `${path}.${key}`, depth + 1);
-      } catch (error) {
-        result[key] = { __kind: 'unreadable', message: text(error instanceof Error ? error.message : String(error)) };
-      }
-    }
-    return result;
   };
 
   return visit(input, '$', 0);

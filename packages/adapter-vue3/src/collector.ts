@@ -370,6 +370,15 @@ function currentPerson(component: TravelComponentLike): TravelInspectionData['cu
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function transportInvoiceEmployeeId(component: TravelComponentLike): string | undefined {
+  const personId = component.person?.employeeId;
+  if (personId) return String(personId);
+  // 已确认的单人差旅组件使用报账人查询标准；其他组件不推断多人归属。
+  const name = component.$options?.name ?? component.$?.type?.name;
+  if (name === 'NEWTRAVELBOE') return currentPerson(component)?.employeeId;
+  return undefined;
+}
+
 export function createTravelCollector(
   component: TravelComponentLike,
   options: TravelCollectorOptions = {},
@@ -381,11 +390,14 @@ export function createTravelCollector(
     collect: () => {
       if (options.legacyMode) return collectLegacyTravel(component, options);
       const requests = requestMetadata(component);
+      const invoiceEmployeeId = transportInvoiceEmployeeId(component);
       const travel: TravelInspectionData = {
+        ...(Array.isArray(component.data?.cost) ? { transportInvoices: toSerializable(component.data.cost, options.serialization) as JsonValue[] } : {}),
+        ...(invoiceEmployeeId ? { transportInvoiceEmployeeId: invoiceEmployeeId } : {}),
         trips: toSerializable(options.getTrips?.() ?? component.travelList ?? []) as JsonValue[],
         calendarData: toSerializable(component.calendarData ?? []) as JsonValue[],
         standardRequests: requests,
-        standardResults: toSerializable(component.standardAmount ?? {}) as Record<string, JsonValue>,
+        standardResults: toSerializable(component.standardAmount ?? {}, { ...options.serialization, expandSharedReferences: true }) as Record<string, JsonValue>,
         standardDates: toSerializable(component.standardDates ?? []) as JsonValue[],
         standardSummary: toSerializable(component.standardSummary ?? component.summary ?? {}),
         travelerNames: options.getTravelerNames?.() ?? defaultNames(component, ['travelerName', 'travelerNames', 'empName', 'employeeName']),
@@ -424,11 +436,12 @@ function collectLegacyTravel(component: TravelComponentLike, options: TravelColl
   }) : [];
   const travel: TravelInspectionData = {
     inspectionMode: 'legacy',
+    ...(Array.isArray(component.data?.cost) ? { transportInvoices: serialize(component.data.cost) as JsonValue[] } : {}),
     ...(conditions ? { queryConditions: serialize(conditions) } : {}),
     ...(component.travelList != null || options.getTrips ? { trips: serialize(options.getTrips?.() ?? component.travelList) as JsonValue[] } : {}),
     ...(Array.isArray(calendar) ? { calendarData: serialize(calendar) as JsonValue[] } : {}),
     ...(calculatedCalendarStandards.length ? { calculatedCalendarStandards: serialize(calculatedCalendarStandards) as JsonValue[] } : {}),
-    ...(component.standardAmount != null ? { standardResults: serialize(component.standardAmount) as Record<string, JsonValue> } : {}),
+    ...(component.standardAmount != null ? { standardResults: toSerializable(component.standardAmount, { ...options.serialization, expandSharedReferences: true }) as Record<string, JsonValue> } : {}),
     ...(component.standardDates != null ? { standardDates: serialize(component.standardDates) as JsonValue[] } : {}),
     ...(component.standardSummary != null ? { standardSummary: serialize(component.standardSummary) } : {}),
     ...(component.data?.zfsBoeSumAmounts != null ? { billSummary: serialize(component.data.zfsBoeSumAmounts) } : {}),

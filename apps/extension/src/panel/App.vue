@@ -27,6 +27,8 @@ import { scopeIdentity } from './aiContext';
 import { useAiWorkspace, sourceIdentity, type AiSession } from './useAiWorkspace';
 import AiPanel from './AiPanel.vue';
 import TracePanel from './TracePanel.vue';
+import TravelStandards from './TravelStandards.vue';
+import TransportInvoiceTable from './TransportInvoiceTable.vue';
 import ValidationRules from './ValidationRules.vue';
 import CalculationRules from './CalculationRules.vue';
 import PropertyJsonView from './PropertyJsonView.vue';
@@ -988,29 +990,18 @@ onBeforeUnmount(() => {
             </template>
 
             <h3>{{ travelView.legacy ? '已采集的候选标准缓存' : '当前人员差旅标准' }}</h3>
-            <div v-if="travelView.standards.length" class="table-scroll">
-              <table v-if="travelView.legacy" class="data-table">
-                <thead><tr><th>缓存地点</th><th>标准类型</th><th>金额或限制</th><th>适用条件</th><th>控制方式</th><th>方案 ID/编码</th></tr></thead>
-                <tbody>
-                  <tr v-for="(row, index) in travelView.standards" :key="`${row.key}-${index}`">
-                    <td>{{ row.place }}</td><td>{{ row.standardName }}</td>
-                    <td>{{ row.amount !== undefined ? amountValue(row.amount, row.currency) : row.transportation ? `交通等级：${row.transportation}` : row.standardDiscount ? `折扣：${row.standardDiscount}` : '未提供金额' }}</td>
-                    <td>{{ row.conditions || '—' }}</td><td>{{ row.controlType }}</td><td>{{ row.schemeId || row.schemeCode }}</td>
-                  </tr>
-                </tbody>
-              </table>
-              <table v-else class="data-table">
-                <thead><tr><th>日期</th><th>地点</th><th>标准类型</th><th>标准金额</th><th>控制方式</th><th>方案</th></tr></thead>
-                <tbody>
-                  <tr v-for="(row, index) in travelView.standards" :key="`${row.key}-${index}`">
-                    <td>{{ row.date }}</td><td>{{ row.place }}</td><td>{{ row.standardName }}</td>
-                    <td>{{ amountValue(row.amount, row.currency) }}</td><td>{{ row.controlType }}</td><td>{{ row.schemeCode }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            <TravelStandards :rows="travelView.standards" :legacy="Boolean(travelView.legacy)" :person-key="`${snapshot.instanceId}:${travelView.person.employeeId}`" :format-amount="amountValue" />
+
+            <h3>交通发票坐席核对</h3>
+            <p class="muted">
+              依据已采集数据核对；命中规则不等于符合标准，需结合控制方式（ALLOW：允许 / WARNING：警告 / FORBID：禁止）。
+            </p>
+            <p v-if="!travelView.transportInvoicesCollected" class="tab-empty">
+              未采集交通发票数据，请更新采集端并重新采集。
+            </p>
+            <TransportInvoiceTable v-else-if="travelView.transportInvoices.length" :rows="travelView.transportInvoices" :person-key="`${snapshot.instanceId}:${travelView.person.employeeId}`" />
             <p v-else class="tab-empty">
-              当前人员尚未采集到差旅标准结果。
+              已采集的发票中暂无适用交通坐席核对的记录。
             </p>
 
             <h3>{{ travelView.legacy ? '已采集的行程明细' : '当前人员行程' }}</h3>

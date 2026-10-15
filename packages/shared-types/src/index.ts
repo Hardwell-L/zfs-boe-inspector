@@ -60,6 +60,10 @@ export interface TravelInspectionData {
   inspectionMode?: 'legacy';
   queryConditions?: JsonValue;
   billSummary?: JsonValue;
+  /** 同一差旅组件持有的发票区数据；缺省表示未采集。 */
+  transportInvoices?: JsonValue[];
+  /** 明确的人员子组件或单人差旅组件身份，避免将多人发票归入报账人。 */
+  transportInvoiceEmployeeId?: string;
   trips?: JsonValue[];
   calendarData?: JsonValue[];
   calculatedCalendarStandards?: JsonValue[];
