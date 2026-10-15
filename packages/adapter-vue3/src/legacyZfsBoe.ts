@@ -78,7 +78,7 @@ function resolveOptions(component: BillTemplateComponentLike, options: ZfsBoeIns
   return {
     projectCode: options.projectCode ?? (typeof window === 'undefined' ? 'unknown-project' : window.location.host),
     environment,
-    adapterVersion: options.adapterVersion ?? '0.2.10',
+    adapterVersion: options.adapterVersion ?? '0.2.13',
     ...(options.zfsPackages ? { zfsPackages: options.zfsPackages } : {}),
     ...(resolvedVueVersion ? { vueVersion: resolvedVueVersion } : {}),
     compatibility: {
