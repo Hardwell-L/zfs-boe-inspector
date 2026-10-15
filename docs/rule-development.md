@@ -15,6 +15,10 @@
 
 ## 规则约束
 
+区域编码重复通过 `AREA_DUPLICATE` 报 `error`，列出所有重复区域的配置路径；区域名称相同不作为重复依据。`FIELD_DUPLICATE_IN_AREA` 只比较同一模板区域内的字段，避免把重复区域误报为区域内字段重复。
+
+变色规则按 BOE 3.7、4.2 的 `colorSetStyle` 共同契约检查 `field.colorSet`：文本类读取 `fieldCode`，`table-search` 读取 `labelCode`，其他非日期/金额字段在 `in/notIn` 分支读取 `fieldCode`。对应条件键缺失或为 null/undefined 时，`FIELD_COLOR_SET_VALUE_MISSING` 报 `error`；非字符串条件或非法结构由 `FIELD_COLOR_SET_INVALID` 报 `error`。日期、日期时间及 `num/amount` 的范围边界允许省略；字符串空值允许参与宿主匹配。`del` 是设计器删除按钮占位，不是运行时必需键（除非字段编码本身就是 `del`）。采集截断等不完整证据返回 `skipped`。规则不依赖现代适配器专属数据，适用于 3.7 及以上沿用该契约的版本；其他版本的宿主行为仍需实际验证。
+
 字段警告规则检查 `FIELD_WARNING_RULE_MISSING` 将非空字符串 `field.warning` 与宿主采集的 `config.warningRuleNames` 精确匹配，未注册时报 `error`，证据指向字段的 `warning` 配置。规则名由适配器读取宿主的 `config/warning`，不硬编码内置规则名单，也不执行 `validateFunc`。已解析的对象规则不参与名称匹配；旧 Snapshot 或无法读取注册表时返回 `skipped`。通用采集器可通过 `warningRules` 传入项目实际使用的注册表。
 
 1. 规则必须是纯函数，不修改 Snapshot。

@@ -13,6 +13,9 @@ import {
 } from './helpers';
 
 const FIELD_RULE_IDS = [
+  'AREA_DUPLICATE',
+  'FIELD_COLOR_SET_INVALID',
+  'FIELD_COLOR_SET_VALUE_MISSING',
   'FIELD_CODE_MISSING',
   'FIELD_DUPLICATE_IN_AREA',
   'FIELD_RUNTIME_PATH_MISSING',
@@ -128,6 +131,76 @@ function skipUnavailableRules(reason: string): RuleEvaluation[] {
   ];
 }
 
+function evaluateColorSet(field: Record<string, unknown>, path: string, identity: string): RuleEvaluation[] {
+  const results: RuleEvaluation[] = [];
+  const configPath = `${path}.colorSet`;
+  if (field.colorSet === undefined || field.colorSet === null || field.colorSet === ''
+    || asRecord(field.colorSet)?.__kind === 'undefined') return results;
+  const unavailable = (value: unknown) => {
+    const kind = asRecord(value)?.__kind;
+    return ['truncated', 'circular', 'unreadable'].includes(kind);
+  };
+  const skip = (evidencePath: string) => {
+    for (const id of ['FIELD_COLOR_SET_INVALID', 'FIELD_COLOR_SET_VALUE_MISSING']) {
+      results.push(skipped(id, 'field-config', `字段 ${identity} 的变色规则采集不完整，暂不判定`, [evidencePath]));
+    }
+  };
+  if (unavailable(field.colorSet)) {
+    skip(configPath);
+    return results;
+  }
+  const parsed = parseMaybeJson(field.colorSet);
+  if (parsed.error || !Array.isArray(parsed.value)) {
+    return [issue('FIELD_COLOR_SET_INVALID', 'field-config', 'error',
+      `字段 ${identity} 的 colorSet 必须是规则数组`, [configPath])];
+  }
+  parsed.value.forEach((value: unknown, index: number) => {
+    const rulePath = `${configPath}.${index}`;
+    if (unavailable(value)) {
+      skip(rulePath);
+      return;
+    }
+    const rule = asRecord(value);
+    if (!rule) {
+      results.push(issue('FIELD_COLOR_SET_INVALID', 'field-config', 'error',
+        `字段 ${identity} 的第 ${index + 1} 条变色规则不是对象`, [rulePath]));
+      return;
+    }
+    // BOE 3.7 / 4.2 的日期与金额范围允许缺省边界，不走 split 分支。
+    if (['date', 'datetime', 'num', 'amount'].includes(String(field.fieldType))) return;
+    const textField = ['label', 'text', 'textarea'].includes(String(field.fieldType));
+    if (!textField && rule.operator !== 'in' && rule.operator !== 'notIn') return;
+    const code = field.fieldType === 'table-search' ? field.labelCode : field.fieldCode;
+    if (unavailable(code) || unavailable(rule.__truncated__)) {
+      skip(rulePath);
+      return;
+    }
+    if (typeof code !== 'string' || !code) {
+      results.push(issue('FIELD_COLOR_SET_VALUE_MISSING', 'field-config', 'error',
+        `字段 ${identity} 的变色规则缺少有效 labelCode`, [`${path}.labelCode`, rulePath]));
+      return;
+    }
+    const condition = rule[code];
+    if (unavailable(condition)) {
+      skip(`${rulePath}.${code}`);
+      return;
+    }
+    const missing = !Object.hasOwn(rule, code) || condition === null || condition === undefined
+      || asRecord(condition)?.__kind === 'undefined';
+    if (missing || typeof condition !== 'string') {
+      results.push(issue(missing ? 'FIELD_COLOR_SET_VALUE_MISSING' : 'FIELD_COLOR_SET_INVALID',
+        'field-config', 'error',
+        `字段 ${identity} 的第 ${index + 1} 条变色规则${missing ? '缺少条件字段' : '条件字段不是字符串'} ${code}`,
+        [`${rulePath}.${code}`, `${path}.${field.fieldType === 'table-search' ? 'labelCode' : 'fieldCode'}`],
+        {
+          reason: `BOE 3.7 / 4.2 在此分支读取 item[${JSON.stringify(code)}] 并调用 split('^')，该配置存在运行时报错风险。`,
+          suggestion: `检查字段编码是否变更，并在变色规则中配置字符串类型的 ${code}；del 是设计器删除按钮占位，不能代替条件字段。`,
+        }));
+    }
+  });
+  return results;
+}
+
 export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluation[] {
   if (snapshot.meta.compatibility?.collection?.status === 'unavailable') {
     return skipUnavailableRules(
@@ -143,6 +216,20 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
   const computeGraph = new Map<string, Set<string>>();
   const cascadeGraph = new Map<string, Set<string>>();
 
+  const areas = new Map<string, string[]>();
+  snapshot.config.template.forEach((value, index) => {
+    const area = asRecord(value);
+    if (typeof area?.areaCode !== 'string' || !area.areaCode) return;
+    const paths = areas.get(area.areaCode) ?? [];
+    paths.push(`config.template.${index}.areaCode`);
+    areas.set(area.areaCode, paths);
+  });
+  for (const [code, paths] of areas) {
+    if (paths.length > 1) results.push(issue(
+      'AREA_DUPLICATE', 'field-config', 'error', `区域编码 ${code} 重复，共 ${paths.length} 个区域`, paths,
+    ));
+  }
+
   for (const item of fields) {
     const { areaCode, fieldCode, field, path } = item;
     const identity = `${areaCode}.${fieldCode}`;
@@ -151,7 +238,9 @@ export function evaluateFieldRules(snapshot: BoeInspectionSnapshot): RuleEvaluat
       continue;
     }
 
-    const duplicates = fields.filter((candidate) => candidate.areaCode === areaCode && candidate.fieldCode === fieldCode);
+    results.push(...evaluateColorSet(field, path, identity));
+
+    const duplicates = fields.filter((candidate) => candidate.areaIndex === item.areaIndex && candidate.fieldCode === fieldCode);
     if (duplicates.length > 1 && duplicates[0]?.path === path) {
       results.push(issue(
         'FIELD_DUPLICATE_IN_AREA',

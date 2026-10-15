@@ -38,6 +38,87 @@ function createSnapshot(): BoeInspectionSnapshot {
 }
 
 describe('字段规则', () => {
+  function colorSnapshot(field: Record<string, JsonValue>): BoeInspectionSnapshot {
+    const snapshot = createSnapshot();
+    snapshot.config.template = [{ areaCode: 'header', areaFields: [field] }];
+    return snapshot;
+  }
+
+  it('区域编码重复独立报告 ERROR，不将跨区域字段重复算作区域内重复', () => {
+    const snapshot = colorSnapshot({ fieldCode: 'remark' });
+    snapshot.config.template.push({ areaCode: 'header', areaFields: [{ fieldCode: 'remark' }] });
+    const results = evaluateFieldRules(snapshot);
+    expect(results.find(({ ruleId }) => ruleId === 'AREA_DUPLICATE')).toMatchObject({
+      status: 'issue', severity: 'error',
+      evidencePaths: ['config.template.0.areaCode', 'config.template.1.areaCode'],
+    });
+    expect(results.find(({ ruleId }) => ruleId === 'FIELD_DUPLICATE_IN_AREA')?.status).toBe('passed');
+  });
+
+  it('同名但不同编码的区域不报重复，空区域仍检查编码', () => {
+    const snapshot = createSnapshot();
+    snapshot.config.template = [
+      { areaCode: 'a', areaName: '明细', areaFields: [] },
+      { areaCode: 'b', areaName: '明细', areaFields: [] },
+    ];
+    expect(evaluateFieldRules(snapshot).find(({ ruleId }) => ruleId === 'AREA_DUPLICATE')?.status).toBe('passed');
+    snapshot.config.template.push({ areaCode: 'a', areaFields: [] });
+    expect(evaluateFieldRules(snapshot).find(({ ruleId }) => ruleId === 'AREA_DUPLICATE')?.severity).toBe('error');
+  });
+
+  it('截图的旧条件键与当前字段不一致时定位实际缺失键，而不是 del', () => {
+    const snapshot = colorSnapshot({
+      fieldCode: 'remark', fieldType: 'textarea',
+      colorSet: [{ color: '#FF0800', spareS76: '核算', del: '', type: 'color', operator: 'in' }],
+    });
+    expect(evaluateFieldRules(snapshot).find(({ ruleId }) => ruleId === 'FIELD_COLOR_SET_VALUE_MISSING')).toMatchObject({
+      status: 'issue', severity: 'error',
+      evidencePaths: ['config.template.0.areaFields.0.colorSet.0.remark', 'config.template.0.areaFields.0.fieldCode'],
+    });
+  });
+
+  it.each(['label', 'text', 'textarea', 'select', 'table-search'])('%s 按宿主分支检查缺失的字符串条件', (fieldType) => {
+    const results = evaluateFieldRules(colorSnapshot({
+      fieldCode: 'code', labelCode: 'name', fieldType,
+      colorSet: [{ type: 'color', color: '#FF0800', operator: 'in' }],
+    }));
+    const result = results.find(({ ruleId }) => ruleId === 'FIELD_COLOR_SET_VALUE_MISSING');
+    expect(result?.severity).toBe('error');
+    expect(result?.evidencePaths[0]).toBe(`config.template.0.areaFields.0.colorSet.0.${fieldType === 'table-search' ? 'name' : 'code'}`);
+  });
+
+  it.each(['date', 'datetime', 'num', 'amount'])('%s 允许省略范围边界', (fieldType) => {
+    const results = evaluateFieldRules(colorSnapshot({
+      fieldCode: 'value', fieldType, colorSet: [{ type: 'color', color: '#FF0800' }],
+    }));
+    expect(results.filter(({ ruleId, status }) => ruleId.startsWith('FIELD_COLOR_SET') && status === 'issue')).toEqual([]);
+  });
+
+  it('空字符串条件和缺省 del 有效，table-search 使用 labelCode，支持 JSON 配置', () => {
+    const results = evaluateFieldRules(colorSnapshot({
+      fieldCode: 'id', labelCode: 'name', fieldType: 'table-search',
+      colorSet: JSON.stringify([{ name: '', operator: 'notIn', type: 'color', color: '#FF0800' }]),
+    }));
+    expect(results.filter(({ ruleId, status }) => ruleId.startsWith('FIELD_COLOR_SET') && status === 'issue')).toEqual([]);
+  });
+
+  it('非字符串条件报告格式错误，截断条件跳过判定', () => {
+    const evaluate = (condition: JsonValue) => evaluateFieldRules(colorSnapshot({
+      fieldCode: 'code', fieldType: 'text', colorSet: [{ code: condition }],
+    }));
+    expect(evaluate(123).find(({ ruleId }) => ruleId === 'FIELD_COLOR_SET_INVALID')?.severity).toBe('error');
+    expect(evaluate({ __kind: 'truncated' }).filter(({ ruleId }) => ruleId.startsWith('FIELD_COLOR_SET'))
+      .every(({ status }) => status === 'skipped')).toBe(true);
+  });
+
+  it('模板不可用时新增规则跳过判定', () => {
+    const snapshot = createSnapshot();
+    snapshot.meta.compatibility = { collection: { status: 'unavailable' } } as NonNullable<BoeInspectionSnapshot['meta']['compatibility']>;
+    for (const ruleId of ['AREA_DUPLICATE', 'FIELD_COLOR_SET_INVALID', 'FIELD_COLOR_SET_VALUE_MISSING']) {
+      expect(evaluateFieldRules(snapshot).find((result) => result.ruleId === ruleId)?.status).toBe('skipped');
+    }
+  });
+
   function warningSnapshot(warning: JsonValue, names?: string[]): BoeInspectionSnapshot {
     const snapshot = createSnapshot();
     snapshot.config.template = [{
